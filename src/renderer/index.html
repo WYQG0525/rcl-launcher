@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; script-src 'self'" />
+<title>RCL</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body data-theme="dark">
+  <div class="aurora" aria-hidden="true"><i></i><i></i><i></i></div>
+
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="logo">RCL</div>
+      <div>
+        <b>RCL 启动器</b>
+        <small id="brand-sub">在线下载版</small>
+      </div>
+    </div>
+
+    <nav class="nav" id="nav">
+      <button data-view="game" class="on">启动游戏<span class="kbd">1</span></button>
+      <button data-view="server">开服务器<span class="kbd">2</span></button>
+      <button data-view="dl">下载<span class="kbd">3</span></button>
+      <button data-view="jobs">下载管理<span class="kbd">4</span></button>
+      <button data-view="content">模组光影<span class="kbd">5</span></button>
+      <button data-view="settings">设置<span class="kbd">6</span></button>
+    </nav>
+
+    <div class="side-foot">
+      <div id="foot-java">Java: 检测中…</div>
+      <div id="foot-store">数据目录: -</div>
+      <div id="foot-space">已下载: -</div>
+      <button class="ghost sm" id="btn-tray" title="收进系统托盘，程序继续在后台跑">收进托盘</button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div>
+        <h1 id="view-title">启动游戏</h1>
+        <p id="view-desc">选一个档案，准备好客户端就能进游戏。</p>
+      </div>
+      <div class="top-actions">
+        <span class="pill" id="pill-offline">检查本地资源…</span>
+        <span class="pill dl hidden" id="pill-dl" title="点开看进度">下载管理</span>
+        <span class="pill" id="pill-running">空闲</span>
+        <button class="ghost" id="btn-update" title="检查 RCL 自身与 MC 内容更新">检查更新</button>
+        <button class="ghost" id="btn-theme" title="切换深浅色">主题</button>
+      </div>
+    </header>
+
+    <!-- ============ 启动游戏 ============ -->
+    <section class="view on" id="view-game">
+      <div class="plist" id="game-list"></div>
+
+      <div class="card hero">
+        <div class="hero-left">
+          <div class="hero-name" id="g-name">还没有游戏档案</div>
+          <div class="badges" id="g-badges"></div>
+          <div class="hero-note" id="g-note">点下面「＋ 新建游戏档案」开始。</div>
+        </div>
+        <div class="hero-right">
+          <button class="cta" id="btn-play" disabled>启动游戏</button>
+          <div class="cta-row">
+            <button class="ghost" id="btn-prepare">准备客户端</button>
+            <button class="ghost danger" id="btn-close-game" disabled>关闭</button>
+          </div>
+          <div class="cta-row">
+            <button class="ghost sm" id="btn-game-dir">打开游戏目录</button>
+            <button class="ghost sm" id="btn-game-remove">删除档案</button>
+          </div>
+          <div class="cta-row">
+            <button class="ghost sm" id="btn-game-import">导入已有游戏</button>
+            <button class="ghost sm" id="btn-game-modpack">装整合包</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="res-head"><b>客户端资源</b><span class="hint" id="g-res-hint">选择版本后显示还差什么</span></div>
+        <div class="res-grid" id="g-res"></div>
+        <div class="bar"><i id="g-res-bar"></i></div>
+      </div>
+
+      <div class="tabs" id="gtabs">
+        <button class="on" data-gtab="log">游戏日志</button>
+        <button data-gtab="form">档案设置</button>
+        <button data-gtab="saves">存档</button>
+        <button data-gtab="plan">启动详情</button>
+      </div>
+      <div class="panel on" id="gtab-log">
+        <div class="console-head">
+          <label class="chk"><input type="checkbox" id="opt-autoscroll" checked /> 自动滚到底</label>
+          <label class="chk"><input type="checkbox" id="opt-color" checked /> 彩色输出</label>
+          <button class="ghost sm" id="btn-gclear">清屏</button>
+          <span class="spacer"></span>
+          <span class="hint" id="gconsole-hint">等待启动…</span>
+        </div>
+        <div class="console" id="gconsole"></div>
+      </div>
+      <div class="panel" id="gtab-form"><div class="form" id="gform"></div></div>
+      <div class="panel" id="gtab-saves"><div id="gsaves"></div></div>
+      <div class="panel" id="gtab-plan"><pre class="plan" id="gplan">选择档案后生成启动计划。</pre></div>
+    </section>
+
+    <!-- ============ 开服务器 ============ -->
+    <section class="view" id="view-server">
+      <div class="plist" id="server-list"></div>
+
+      <div class="card hero">
+        <div class="hero-left">
+          <div class="hero-name" id="hero-name">还没有服务器</div>
+          <div class="badges" id="hero-badges"></div>
+          <div class="hero-note" id="hero-note">点下面「＋ 新建服务器」开始。</div>
+        </div>
+        <div class="hero-right">
+          <button class="cta" id="btn-start" disabled>启动服务器</button>
+          <div class="cta-row">
+            <button class="ghost" id="btn-stop" disabled>正常停止</button>
+            <button class="ghost danger" id="btn-kill" disabled>强制结束</button>
+          </div>
+          <div class="cta-row">
+            <button class="ghost sm" id="btn-dir">打开目录</button>
+            <button class="ghost sm" id="btn-remove">删除实例</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="stats" id="stats"></div>
+
+      <div class="tabs" id="tabs">
+        <button class="on" data-tab="console">实时控制台</button>
+        <button data-tab="props">服务器属性</button>
+        <button data-tab="mods">模组 / 插件</button>
+        <button data-tab="ops">OP 与玩家</button>
+        <button data-tab="backup">备份</button>
+        <button data-tab="plan">启动详情</button>
+      </div>
+
+      <div class="panel on" id="tab-console">
+        <div class="console-head">
+          <label class="chk"><input type="checkbox" id="opt-autoscroll-s" checked /> 自动滚到底</label>
+          <label class="chk"><input type="checkbox" id="opt-color-s" checked /> 彩色输出</label>
+          <input class="mini" id="opt-filter" placeholder="过滤关键字，例如 Done / WARN" />
+          <button class="ghost sm" id="btn-clear">清屏</button>
+          <span class="spacer"></span>
+          <span class="hint" id="console-hint">等待启动…</span>
+        </div>
+        <div class="console" id="console"></div>
+        <div class="cmd-bar">
+          <div class="quick" id="quick"></div>
+          <div class="cmd-input">
+            <span>&gt;</span>
+            <input id="cmd" placeholder="向服务器发送指令，例如 list / say 你好 / whitelist add xxx" disabled />
+            <button class="cta sm" id="btn-send" disabled>发送</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel" id="tab-props"><div class="form" id="props-form"></div></div>
+      <div class="panel" id="tab-mods"><div id="mods-box"></div></div>
+      <div class="panel" id="tab-ops"><div id="ops-box"></div></div>
+      <div class="panel" id="tab-backup"><div id="backup-box"></div></div>
+      <div class="panel" id="tab-plan"><pre class="plan" id="plan-box">选一个服务器后自动生成启动计划。</pre></div>
+    </section>
+
+    <!-- ============ 下载 ============ -->
+    <section class="view" id="view-dl">
+      <div class="card note">
+        程序本体不再内置任何 MC 文件，这里下什么才有什么。<b>默认走镜像源</b>（设置里可换），
+        下载后由 <b>启动游戏</b> / <b>开服务器</b> 两页直接调用；已下载的版本会显示占用，可以删。
+      </div>
+      <div class="card">
+        <div class="res-head">
+          <b>本地已有</b>
+          <span class="hint" id="dl-hint">统计中…</span>
+          <button class="ghost sm" id="dl-clean">回收无用依赖</button>
+        </div>
+        <div id="dl-rows"></div>
+      </div>
+      <div class="card">
+        <div class="res-head"><b>取一个版本</b><span class="hint" id="dl-pick-hint">正在拉版本清单…</span></div>
+        <div class="dl-pick">
+          <input class="mini" id="dl-filter" placeholder="筛选版本，例如 1.21 / 26.3 / snapshot" />
+          <select class="mini" id="dl-type">
+            <option value="release">正式版</option>
+            <option value="snapshot">快照</option>
+            <option value="old_beta">旧 Beta</option>
+            <option value="old_alpha">旧 Alpha</option>
+            <option value="all">全部</option>
+          </select>
+          <button class="ghost sm" id="dl-refresh">重新拉清单</button>
+          <span class="spacer"></span>
+          <span class="hint" id="dl-count">-</span>
+        </div>
+        <div class="vlist" id="dl-list"></div>
+      </div>
+      <div class="card">
+        <div class="res-head"><b>整合包</b><span class="hint" id="mp-hint">搜 Modrinth 的整合包，不用填版本 —— 点一条就列出它的全部版本，选一个直接装成新档案</span></div>
+        <div class="dl-pick">
+          <input class="mini" id="mp-q" placeholder="搜索整合包，例如 fabulously / vault hunters / skyfactory" />
+          <button class="ghost sm" id="mp-go">搜索</button>
+          <span class="spacer"></span>
+          <span class="hint" id="mp-count">-</span>
+        </div>
+        <div class="vlist" id="mp-list"></div>
+      </div>
+      <div class="card">
+        <div class="res-head"><b>Java 运行时</b><span class="hint" id="dl-java-hint">-</span></div>
+        <div id="dl-java"></div>
+      </div>
+    </section>
+
+    <!-- ============ 下载管理 ============ -->
+    <section class="view" id="view-jobs">
+      <div class="card">
+        <div class="res-head">
+          <b>下载管理</b>
+          <span class="hint" id="j-sum">没有任务</span>
+        </div>
+        <div class="bar"><i id="j-all"></i></div>
+        <div class="c-bar" style="margin-top:10px">
+          <button class="ghost sm" id="j-cancel-all">全部取消</button>
+          <button class="ghost sm" id="j-clear">清除已完成</button>
+          <span class="spacer"></span>
+          <span class="hint" id="j-speed"></span>
+        </div>
+      </div>
+      <div id="j-list"></div>
+    </section>
+
+    <!-- ============ 模组 / 光影 / 材质 ============ -->
+    <section class="view" id="view-content">
+      <div class="card">
+        <div class="c-bar">
+          <select class="mini" id="c-source">
+            <option value="modrinth">Modrinth（免密钥可用）</option>
+            <option value="curse">CurseForge（需 API Key）</option>
+          </select>
+          <select class="mini" id="c-type">
+            <option value="mod">模组</option>
+            <option value="modpack">整合包</option>
+            <option value="shader">光影</option>
+            <option value="resourcepack">材质包</option>
+          </select>
+          <input class="mini grow" id="c-q" placeholder="搜索关键字，例如 sodium / SEUS / faithful" />
+          <button class="cta sm" id="c-go">搜索</button>
+        </div>
+        <div class="c-bar">
+          <span class="hint">装到：</span>
+          <select class="mini" id="c-target"></select>
+          <span class="hint" id="c-ver-hint">版本跟随目标</span>
+          <span class="spacer"></span>
+          <span class="hint" id="c-status">先选一个游戏档案或服务器</span>
+        </div>
+      </div>
+      <div id="c-list"></div>
+    </section>
+
+    <!-- ============ 设置 ============ -->
+    <section class="view" id="view-settings">
+      <div class="card form" id="settings-form"></div>
+    </section>
+  </main>
+
+  <div class="toast" id="toast"></div>
+
+  <div class="modal" id="modal" hidden>
+    <div class="modal-card">
+      <h3 id="modal-title">标题</h3>
+      <div id="modal-body"></div>
+      <div class="modal-foot">
+        <button class="ghost" id="modal-cancel">取消</button>
+        <button class="cta" id="modal-ok">确定</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,36 @@
+appId: com.rcl.launcher
+productName: RCL
+copyright: 本地构建，仅供自用
+
+directories:
+  # 产物一律放 E 盘 qwen 目录（C 盘不留构建输出）
+  output: E:/qwen/rcl-release
+  buildResources: build
+
+asar: true
+compression: normal
+# 程序本体只含代码与图标；MC 的版本、核心、Java、资源全部改成运行时下载
+files:
+  - src/**/*
+  - build/icon.ico
+  - package.json
+
+win:
+  target:
+    - nsis
+  icon: build/icon.ico
+  artifactName: RCL-Setup-${version}.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: RCL
+  uninstallDisplayName: RCL 启动器
+  deleteAppDataOnUninstall: false
+  runAfterFinish: true
+  installerHeaderIcon: build/icon.ico
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico

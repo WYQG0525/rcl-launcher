@@ -1,0 +1,5 @@
+# 统一按 LF 入库，避免 Windows 上 clone 完满屏"已修改"
+* text=auto eol=lf
+*.ico binary
+*.png binary
+*.exe binary

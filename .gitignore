@@ -1,0 +1,21 @@
+# 依赖与产物
+node_modules/
+package-lock.json.bak
+
+# 构建输出（electron-builder 的 output 目录在别处，这里兜住本地跑出来的东西）
+dist/
+release/
+*.exe
+*.blockmap
+builder-debug.yml
+
+# 临时与测试
+tmp/
+*.log
+*.part
+
+# 编辑器 / 系统
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
