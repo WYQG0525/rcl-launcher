@@ -77,8 +77,46 @@ function hashFile(file, algo = 'sha1') {
   });
 }
 
+// 同一个目标文件只允许一份在写：界面重绘会把"下载中"的按钮恢复成可点，连点就会开第二份，
+// 两份队列同时往同一个 .part 追加，写出来的东西校验不过甚至是坏文件。
+const inflight = new Map();
+
+function abortSignal(signal) {
+  return new Promise((resolve) => {
+    if (!signal) return;
+    if (signal.aborted) return resolve('aborted');
+    signal.addEventListener('abort', () => resolve('aborted'), { once: true });
+  });
+}
+
+// 另一个任务正在下同一个文件：等它，别并行写
+async function joinInflight(target, { sha1, sha256, signal }) {
+  const algo = sha256 ? 'sha256' : 'sha1';
+  const expect = sha256 || sha1 || null;
+  let jobErr = null;
+  const raced = await Promise.race([
+    inflight.get(target).then(() => 'done', (e) => { jobErr = e; return 'error'; }),
+    abortSignal(signal),
+  ]);
+  if (fs.existsSync(target) && (!expect || (await hashFile(target, algo)) === expect)) return { skipped: true, file: target, deduped: true };
+  if (raced === 'aborted') throw new Error('aborted');
+  if (jobErr) throw jobErr;
+  throw new Error(`${path.basename(target)} 正在由另一个任务下载（进度在「下载管理」里看），等它下完就行`);
+}
+
 // 单个文件下载：candidates 已经排好优先级（镜像在前，官方兜底）
 async function downloadFile(target, opts) {
+  if (inflight.has(target)) return joinInflight(target, opts);
+  const job = doDownload(target, opts);
+  inflight.set(target, job);
+  try {
+    return await job;
+  } finally {
+    inflight.delete(target);
+  }
+}
+
+async function doDownload(target, opts) {
   const { candidates, sha1, sha256, size = 0, signal, onProgress, chunkTimeout } = opts;
   const algo = sha256 ? 'sha256' : 'sha1';
   const expect = sha256 || sha1 || null;

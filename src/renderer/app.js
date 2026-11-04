@@ -1135,6 +1135,8 @@ function renderJobs() {
   const j = S.jobs;
   const pct = j.totalBytes ? Math.min(100, Math.round((j.bytes / j.totalBytes) * 100)) : (j.active ? 0 : 100);
   $('#j-all').style.width = (j.active ? pct : 0) + '%';
+  // 有任务在跑时给进度条叠一道扫光，一眼能看出还活着
+  $('#j-all').parentNode.classList.toggle('live', !!j.active);
   $('#j-sum').textContent = j.active ? `${j.active} 个任务进行中 · 完成 ${j.done} · 失败 ${j.failed}` : (j.jobs.length ? `全部完成（${j.done} 个任务）` : '还没有下载任务，去「下载」页取版本或在「模组光影」装模组');
   $('#j-speed').textContent = j.active ? `合计 ${(j.speed / 1048576).toFixed(1)} MB/s · 已传 ${MB(j.bytes)} / ${MB(j.totalBytes)}` : '';
   const box = $('#j-list');

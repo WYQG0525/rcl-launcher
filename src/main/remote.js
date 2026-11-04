@@ -33,9 +33,19 @@ class Remote {
     this.root = dirs.root;
     this.metaDir = ensureDir(path.join(dirs.root, 'store', 'meta'));
     this.jreRoot = ensureDir(path.join(dirs.root, 'runtime'));
+    this._busy = new Map();
   }
 
   get settings() { return this.store.settings; }
+
+  // 同一件事只开一份下载：连点、或从不同入口（下载页 / 准备客户端 / 装整合包）撞车时，
+  // 后来者直接等同一份结果，不会在「下载管理」里冒出两条一样的任务
+  once(key, run) {
+    if (this._busy.has(key)) return this._busy.get(key);
+    const p = Promise.resolve().then(run).finally(() => this._busy.delete(key));
+    this._busy.set(key, p);
+    return p;
+  }
 
   // ---------- 版本清单 ----------
   async versionList({ refresh = false } = {}) {
@@ -103,7 +113,9 @@ class Remote {
     return q;
   }
 
-  async downloadServer(mc) {
+  async downloadServer(mc) { return this.once('server:' + mc, () => this._downloadServer(mc)); }
+
+  async _downloadServer(mc) {
     const j = await this.versionJson(mc);
     const d = j.downloads && j.downloads.server;
     if (!d) throw new Error(`${mc} 没有官方服务端 jar`);
@@ -114,7 +126,9 @@ class Remote {
     return { mc, file: target, bytes: d.size };
   }
 
-  async downloadClient(mc) {
+  async downloadClient(mc) { return this.once('client:' + mc, () => this._downloadClient(mc)); }
+
+  async _downloadClient(mc) {
     const j = await this.versionJson(mc);
     const d = j.downloads && j.downloads.client;
     if (!d) throw new Error(`${mc} 没有官方客户端 jar`);
@@ -127,7 +141,9 @@ class Remote {
   }
 
   // 库（含 LWJGL natives classifier）
-  async downloadLibraries(mc, { client = true } = {}) {
+  async downloadLibraries(mc, { client = true } = {}) { return this.once(`libs:${mc}:${client ? 'client' : 'server'}`, () => this._downloadLibraries(mc, { client })); }
+
+  async _downloadLibraries(mc, { client = true } = {}) {
     const j = await this.versionJson(mc);
     const prof = resolveProfile(j, { server: !client });
     const tasks = [];
@@ -204,7 +220,9 @@ class Remote {
     return file;
   }
 
-  async downloadAssets(mc) {
+  async downloadAssets(mc) { return this.once('assets:' + mc, () => this._downloadAssets(mc)); }
+
+  async _downloadAssets(mc) {
     const file = await this.downloadAssetIndex(mc);
     if (!file) return { files: 0, note: '没有资源索引' };
     const map = readJsonSafe(file, { objects: {} }).objects || {};

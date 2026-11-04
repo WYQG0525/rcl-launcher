@@ -1,6 +1,6 @@
 {
   "name": "rcl-launcher",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "private": true,
   "description": "RCL：Minecraft 客户端启动 + 服务器管理一体启动器（服务端离线内置）",
   "author": "Qoder",

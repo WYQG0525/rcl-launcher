@@ -9,6 +9,9 @@ const { isReady } = require('./paths');
 const bundler = require('./bundler');
 const { offlineUuid } = require('./auth');
 
+// 启动器自报版本：从 package.json 读，省得每次发版都要回来改硬编码
+const APP_VERSION = require('../../package.json').version;
+
 const MB = (n) => (n / 1048576).toFixed(1);
 
 class ClientStore {
@@ -221,7 +224,7 @@ class ClientStore {
       `-Xmx${mem}M`, `-Xms${Math.min(mem, 1024)}M`,
       `-Djava.library.path=${rp(natives.dir)}`,
       '-Dfile.encoding=UTF-8', '-Dstdout.encoding=UTF-8', '-Dstderr.encoding=UTF-8',
-      '-Dminecraft.launcher.brand=RCL', '-Dminecraft.launcher.version=' + (settings.appVersion || '1.0.2'),
+      '-Dminecraft.launcher.brand=RCL', '-Dminecraft.launcher.version=' + (settings.appVersion || APP_VERSION),
     ];
     if (identity.type === 'aai') {
       const jar = this.authInjector();
@@ -250,7 +253,7 @@ class ClientStore {
       userType: identity.userType,
       version_type: 'release',
       launcher_name: 'RCL',
-      launcher_version: settings.appVersion || '1.0.2',
+      launcher_version: settings.appVersion || APP_VERSION,
       natives_directory: rp(natives.dir),
       demo: 'false',
       resolution_width: game.width || null,

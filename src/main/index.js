@@ -16,11 +16,13 @@ const { ClientStore } = require('./client');
 const { Auth, AAI_PRESETS } = require('./auth');
 const { Updater } = require('./updater');
 const modpack = require('./modpack');
+const { Gate } = require('./gate');
 const jobs = require('./jobs');
 const jre = require('./jre');
 
 let win = null;
 let store, catalog, remote, auth, manager, gameManager, installer, client, updater;
+const gate = new Gate();   // 所有会起下载/安装的入口都过它，见 gate.js
 let javaList = [];
 let tray = null;
 let hiddenToTray = false;
@@ -337,6 +339,16 @@ async function runSelfTest() {
       const re = await window.mcl.gamesProbe(fx);
       step('删档案没动用户文件', re.saves === 1 && re.mods === 1);
 
+      // 重复导入同一个目录不该长出两个档案：同步入口靠同名拦截，异步下载入口靠 gate（见 gate.js）
+      await window.mcl.gamesImport({ dir: fx, versionId: '1.20.1', name: '重复导入用例', username: 'P1' });
+      let twice = '没拦住';
+      try { await window.mcl.gamesImport({ dir: fx, versionId: '1.20.1', name: '重复导入用例', username: 'P2' }); } catch (e) { twice = '拦住: ' + e.message; }
+      step('第二次导入被同名挡住', twice);
+      const gl = await window.mcl.gamesList();
+      step('重复导入只有一个档案', gl.filter((x) => x.name === '重复导入用例').length === 1);
+      const keep = gl.find((x) => x.name === '重复导入用例');
+      if (keep) await window.mcl.gamesRemove({ id: keep.id });
+
       click('#nav button[data-view=server]');
       await sleep(400);
       step('服务器页标题', document.querySelector('#view-title').textContent);
@@ -368,6 +380,23 @@ async function runSelfTest() {
       step('Java 行数', document.querySelectorAll('#dl-java .core').length);
       step('有回收按钮', !!document.querySelector('#dl-clean'));
       step('下载页有整合包搜索框', !!document.querySelector('#mp-q'));
+      if (DO_FULL) {
+        // 异步入口的闸门：两个并发装同一个版本服务端，下载管理里只该出现一个任务
+        const before = (await window.mcl.jobsList()).jobs.length;
+        await Promise.all([window.mcl.dlInstallServer('1.20.1'), window.mcl.dlInstallServer('1.20.1')]);
+        const after = (await window.mcl.jobsList()).jobs.filter((x) => /下载服务端 1\.20\.1/.test(x.label));
+        step('并发装服务端只开一个任务', after.length === 1 ? '1 个' : after.length + ' 个');
+        step('并发装服务端任务已完成', after[0] && after[0].state === 'done' ? after[0].state : String(after[0] && after[0].state));
+        // 一次请求会拆成"服务端 jar + 依赖库"两个任务，所以新增 2 条是正常的（不是重复）
+        step('并发后新增任务数（服务端+依赖库）', (await window.mcl.jobsList()).jobs.length - before);
+
+        // 安装器入口（不是 remote）也要只跑一份：Paper 连点两次
+        await Promise.all([window.mcl.dlInstallPaper({ mc: '1.20.1' }), window.mcl.dlInstallPaper({ mc: '1.20.1' })]);
+        const pap = (await window.mcl.jobsList()).jobs.filter((x) => /下载 Paper 1\.20\.1/.test(x.label));
+        step('并发装 Paper 只开一个任务', pap.length === 1 ? '1 个' : pap.length + ' 个');
+        const local = await window.mcl.dlLocal();
+        step('Paper 落盘一份', (local.paper || []).filter((p) => p.mc === '1.20.1' && p.ready).length);
+      }
       await until(() => document.querySelectorAll('#mp-list .item').length > 0);
       step('整合包进页自动出结果', document.querySelectorAll('#mp-list .item').length);
       step('整合包首条', (document.querySelector('#mp-list .item b') || {}).textContent || '-');
@@ -445,11 +474,11 @@ ipcMain.handle('java:browse', async () => {
   const r = await dialog.showOpenDialog(win, { title: '选择 java.exe', properties: ['openFile'], filters: [{ name: 'java', extensions: ['exe'] }] });
   return r.canceled ? null : r.filePaths[0];
 });
-ipcMain.handle('java:download', async (_e, major) => {
+ipcMain.handle('java:download', (_e, major) => gate.run('jre:' + major, async () => {
   const r = await remote.downloadJre(Number(major));
   javaList = await jre.discover(store.dirs.runtime);
   return r;
-});
+}));
 
 /* ---------------- 下载页：版本 / 核心 / 卸载 ---------------- */
 ipcMain.handle('dl:versions', async (_e, { refresh } = {}) => {
@@ -466,22 +495,22 @@ ipcMain.handle('dl:versions', async (_e, { refresh } = {}) => {
   };
 });
 ipcMain.handle('dl:versionJson', (_e, mc) => remote.versionJson(mc));
-ipcMain.handle('dl:installServer', (_e, mc) => remote.downloadServer(mc).then(() => remote.downloadLibraries(mc, { client: false })));
-ipcMain.handle('dl:installClient', (_e, mc) => client.install(mc, { withAssets: true }));
+ipcMain.handle('dl:installServer', (_e, mc) => gate.run('server:' + mc, () => remote.downloadServer(mc).then(() => remote.downloadLibraries(mc, { client: false }))));
+ipcMain.handle('dl:installClient', (_e, mc) => gate.run('client-full:' + mc, () => client.install(mc, { withAssets: true })));
 ipcMain.handle('dl:clientStatus', (_e, mc) => client.status(mc, { fresh: true }));
-ipcMain.handle('dl:installPaper', (_e, { mc, build }) => installer.installPaper(mc, build));
-ipcMain.handle('dl:installFabric', (_e, { mc, loader }) => installer.installFabric(mc, loader));
+ipcMain.handle('dl:installPaper', (_e, { mc, build }) => gate.run(`paper:${mc}:${build || ''}`, () => installer.installPaper(mc, build)));
+ipcMain.handle('dl:installFabric', (_e, { mc, loader }) => gate.run(`fabric:${mc}:${loader || ''}`, () => installer.installFabric(mc, loader)));
 ipcMain.handle('dl:listPaper', (_e, mc) => installer.listPaper(mc));
 ipcMain.handle('dl:listFabric', (_e, mc) => installer.listFabric(mc));
 ipcMain.handle('dl:listForge', (_e, mc) => installer.listForge(mc));
-ipcMain.handle('dl:installForge', async (_e, { id, forgeVersion, localInstaller }) => {
+ipcMain.handle('dl:installForge', (_e, { id, forgeVersion, localInstaller }) => gate.run(`forge:${id}:${forgeVersion}`, async () => {
   const inst = store.get(id) || store.getGame(id);
   const r = await installer.installForge(inst, forgeVersion, { localInstaller });
   if (store.get(id)) store.patch(id, { core: 'forge', coreVersion: forgeVersion, installed: true });
   return r;
-});
-ipcMain.handle('dl:uninstall', (_e, mc) => catalog.uninstallVersion(mc));
-ipcMain.handle('dl:cleanOrphans', (_e, { dryRun = true } = {}) => catalog.cleanOrphanLibs({ dryRun }));
+}));
+ipcMain.handle('dl:uninstall', (_e, mc) => gate.run('uninstall:' + mc, () => catalog.uninstallVersion(mc)));
+ipcMain.handle('dl:cleanOrphans', (_e, { dryRun = true } = {}) => gate.run('cleanOrphans:' + dryRun, () => catalog.cleanOrphanLibs({ dryRun })));
 ipcMain.handle('dl:local', () => catalog.localInfo());
 
 /* ---------------- 检查更新 ---------------- */
@@ -491,32 +520,27 @@ ipcMain.handle('update:mc', (_e, opts) => updater.checkMc(opts || {}));
 /* ---------------- 内容搜索：Modrinth / CurseForge ---------------- */
 ipcMain.handle('content:search', (_e, q) => remote.search(q));
 ipcMain.handle('content:files', (_e, { source, project, fileId, mcVersion, loader, limit, offset }) => (source === 'curse' ? remote.curseFiles(project, fileId) : remote.modrinthFiles(project, mcVersion, loader, limit || 24, offset || 0)));
-ipcMain.handle('content:download', (_e, { url, fileName, into, folder }) => {
-  const dir = path.join(into, folder);
-  return remote.downloadFileTo(url, dir, fileName);
-});
-ipcMain.handle('content:toInstance', async (_e, { id, kind, url, fileName }) => {
+ipcMain.handle('content:toInstance', (_e, { id, kind, url, fileName }) => gate.run(`into:${id}:${url}`, async () => {
   const inst = store.get(id) || store.getGame(id);
   const base = store.get(id) ? store.instanceDir(inst) : store.gameDir(inst);
   const sub = kind === 'shader' ? 'shaderpacks' : kind === 'resourcepack' ? 'resourcepacks' : 'mods';
   const r = await remote.downloadFileTo(url, path.join(base, sub), fileName);
   return { ...r, dir: path.join(base, sub) };
-});
+}));
 
 /* ---------------- 登录 ---------------- */
 ipcMain.handle('auth:list', () => auth.list());
 ipcMain.handle('auth:remove', (_e, key) => auth.remove(key));
-ipcMain.handle('auth:msLogin', async (_e, { clientId }) => {
+ipcMain.handle('auth:msLogin', (_e, { clientId }) => gate.run('ms-login', async () => {
   const id = (clientId || store.settings.msClientId || '').trim();
-  let code = null;
-  const p = auth.msDeviceLogin(id, { onCode: (c) => { code = c; if (win) win.webContents.send('auth-device-code', c); } });
+  const p = auth.msDeviceLogin(id, { onCode: (c) => { if (win) win.webContents.send('auth-device-code', c); } });
   return p;
-});
+}));
 ipcMain.handle('auth:msRefresh', (_e, key) => auth.msRefresh(key));
-ipcMain.handle('auth:ensureInjector', async () => {
+ipcMain.handle('auth:ensureInjector', () => gate.run('authlib-injector', async () => {
   const jar = await auth.ensureInjector();
   return { jar, bytes: fs.statSync(jar).size };
-});
+}));
 
 /* ---------------- 服务器实例 ---------------- */
 ipcMain.handle('instances:list', () => store.instances.map((i) => decorate(i)));
@@ -629,7 +653,7 @@ ipcMain.handle('game:plan', (_e, id) => {
 
 /* ---------------- 导入已有游戏目录 ---------------- */
 ipcMain.handle('games:probe', (_e, dir) => probeGameDir(dir));
-ipcMain.handle('games:import', (_e, input) => {
+ipcMain.handle('games:import', (_e, input) => gate.run(`import:${input.dir}:${input.versionId || ''}`, () => {
   const p = probeGameDir(input.dir);
   const v = p.versions.find((x) => x.id === input.versionId) || p.versions[0];
   if (!v) throw new Error('这个目录里没找到任何版本（要有 versions/<版本>/<版本>.json）');
@@ -649,7 +673,7 @@ ipcMain.handle('games:import', (_e, input) => {
   });
   client.invalidate();
   return { game: decorateGame(g), found: p, version: v };
-});
+}));
 
 /* ---------------- 整合包（Modrinth .mrpack）---------------- */
 ipcMain.handle('modpack:pick', async () => {
@@ -663,19 +687,22 @@ ipcMain.handle('modpack:pick', async () => {
 ipcMain.handle('modpack:summarize', (_e, file) => modpack.summarize(file));
 
 async function installModpackFrom({ file, gameId, name, withAssets = true }) {
-  const info = modpack.summarize(file);
-  if (!info.mc) throw new Error('整合包没写明要哪个 Minecraft 版本（dependencies.minecraft）');
-  if (info.loader.type === 'neoforge' || info.loader.type === 'quilt') throw new Error(`${info.loader.type} 整合包还不能自动装，目前支持原版 / Fabric / Forge`);
-  let g = gameId ? store.getGame(gameId) : null;
-  if (g && g.mcVersion !== info.mc) throw new Error(`「${g.name}」是 ${g.mcVersion} 的档案，这个整合包要 ${info.mc} —— 换成新建档案来装`);
-  if (!g) {
-    const base = (name || info.name || '整合包').trim();
-    let n = base;
-    for (let i = 2; store.games.some((x) => x.name === n); i++) n = `${base} ${i}`;
-    g = store.createGame({ name: n, mcVersion: info.mc });
-  }
-  const r = await installer.installModpack({ file, game: g, withAssets });
-  return { ...r, game: decorateGame(r.game) };
+  // 闸门放在这里：连点会建出两个档案、装两遍，因为档案是在这里面新建的
+  return gate.run(`modpack:${file}:${gameId || ''}`, async () => {
+    const info = modpack.summarize(file);
+    if (!info.mc) throw new Error('整合包没写明要哪个 Minecraft 版本（dependencies.minecraft）');
+    if (info.loader.type === 'neoforge' || info.loader.type === 'quilt') throw new Error(`${info.loader.type} 整合包还不能自动装，目前支持原版 / Fabric / Forge`);
+    let g = gameId ? store.getGame(gameId) : null;
+    if (g && g.mcVersion !== info.mc) throw new Error(`「${g.name}」是 ${g.mcVersion} 的档案，这个整合包要 ${info.mc} —— 换成新建档案来装`);
+    if (!g) {
+      const base = (name || info.name || '整合包').trim();
+      let n = base;
+      for (let i = 2; store.games.some((x) => x.name === n); i++) n = `${base} ${i}`;
+      g = store.createGame({ name: n, mcVersion: info.mc });
+    }
+    const r = await installer.installModpack({ file, game: g, withAssets });
+    return { ...r, game: decorateGame(r.game) };
+  });
 }
 
 ipcMain.handle('modpack:install', (_e, opts) => installModpackFrom(opts));

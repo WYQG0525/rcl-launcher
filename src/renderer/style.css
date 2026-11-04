@@ -257,3 +257,39 @@ body[data-theme="light"] {
 ::-webkit-scrollbar { width: 9px; height: 9px; }
 ::-webkit-scrollbar-thumb { background: var(--line); border-radius: 9px; }
 ::-webkit-scrollbar-track { background: transparent; }
+
+/* ---------- 动效 ---------- */
+/* 克制原则：只让"切换、弹出、按下、正在传"这四件事有动画。
+   列表项不做入场动画——筛选/选中/刷新都会重绘，重绘就重播，反而满屏闪。 */
+@media (prefers-reduced-motion: no-preference) {
+  /* 切页面：淡入 + 轻微上浮 */
+  .view.on { animation: rclViewIn .26s cubic-bezier(.22, .61, .36, 1) both; }
+  @keyframes rclViewIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+  /* 弹窗：遮罩淡入 + 卡片弹一下 */
+  .modal:not([hidden]) { animation: rclFadeIn .16s ease-out both; }
+  .modal:not([hidden]) .modal-card { animation: rclPop .22s cubic-bezier(.2, .9, .3, 1.15) both; }
+  @keyframes rclFadeIn { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes rclPop { from { opacity: 0; transform: translateY(10px) scale(.972); } to { opacity: 1; transform: none; } }
+
+  /* 按钮：悬停/按下有实感 */
+  button { transition: transform .1s ease, background-color .15s, border-color .15s, color .15s, box-shadow .15s; }
+  button:active:not(:disabled) { transform: scale(.968); }
+
+  /* 卡片类：鼠标经过轻轻浮起（只做 hover，重绘也不会重播） */
+  .item, .jobrow, .core { transition: transform .15s ease, border-color .15s ease, box-shadow .15s ease; }
+  .item:hover, .jobrow:hover { transform: translateY(-1px); border-color: color-mix(in srgb, var(--acc) 40%, var(--line)); }
+
+  /* 任务在跑：进度条上一道扫光，能一眼看出"还活着" */
+  .bar.live i { position: relative; overflow: hidden; }
+  .bar.live i::after {
+    content: ""; position: absolute; inset: 0;
+    background: linear-gradient(105deg, transparent 32%, rgba(255, 255, 255, .38) 50%, transparent 68%);
+    animation: rclSweep 1.35s linear infinite;
+  }
+  @keyframes rclSweep { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+
+  /* 右上角的下载胶囊：有任务时呼吸 */
+  #pill-dl.ok { animation: rclBreathe 2.2s ease-in-out infinite; }
+  @keyframes rclBreathe { 50% { opacity: .62; } }
+}
