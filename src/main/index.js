@@ -129,7 +129,8 @@ async function boot() {
   store.settings.appVersion = app.getVersion();
   store.dirs = ensureDirs(store.root);
   catalog = new Catalog(store.dirs);
-  remote = new Remote({ store, dirs: store.dirs });
+  catalog.isolationMode = () => store.settings.isolation;
+  remote = new Remote({ store, dirs: store.dirs, catalog });
   auth = new Auth({ dirs: store.dirs });
   manager = new ServerManager({ store, catalog, pickJava });
   installer = new Installer({ store, catalog, remote });
@@ -349,6 +350,30 @@ async function runSelfTest() {
       const keep = gl.find((x) => x.name === '重复导入用例');
       if (keep) await window.mcl.gamesRemove({ id: keep.id });
 
+      // 版本隔离策略：只在建档时起作用，改回来不能让已有档案的目录漂移
+      const iso = [];
+      await window.mcl.settingsSet({ isolation: 'off' });
+      const ia = await window.mcl.gamesCreate({ name: '隔离A', mcVersion: '1.21.1' });
+      const ib = await window.mcl.gamesCreate({ name: '隔离B', mcVersion: '1.20.1' });
+      iso.push(ia.id, ib.id);
+      step('关闭隔离时两个档案同一目录', ia.dir === ib.dir && /_共用$/.test(ia.dir) ? '是' : '否(' + ia.dir + ' | ' + ib.dir + ')');
+      await window.mcl.settingsSet({ isolation: 'modded' });
+      const ic = await window.mcl.gamesCreate({ name: '隔离C原版', mcVersion: '1.21.1' });
+      const id = await window.mcl.gamesCreate({ name: '隔离D模组', mcVersion: '1.21.1', loader: { type: 'fabric', version: '0.16.9' } });
+      iso.push(ic.id, id.id);
+      step('模组档案独立而原版共用', /_原版共用$/.test(ic.dir) && !/_原版共用$/.test(id.dir) ? '是' : '否(' + ic.dir + ' | ' + id.dir + ')');
+      await window.mcl.settingsSet({ isolation: 'all' });
+      const ie = await window.mcl.gamesCreate({ name: '隔离E', mcVersion: '1.21.1' });
+      iso.push(ie.id);
+      step('隔离所有版本时按档案名建目录', /隔离E$/.test(ie.dir) ? '是' : ie.dir);
+      const before = { };
+      before[ia.id] = ia.dir; before[ib.id] = ib.dir; before[ic.id] = ic.dir; before[id.id] = id.dir;
+      const drift = (await window.mcl.gamesList()).filter((x) => before[x.id]);
+      step('改设置不影响已有档案', drift.length === 4 && drift.every((x) => x.dir === before[x.id]) ? '是' : '有档案目录漂了');
+      for (const g of drift) await window.mcl.gamesRemove({ id: g.id, deleteFiles: true });
+      for (const gid of iso) await window.mcl.gamesRemove({ id: gid, deleteFiles: true });
+      step('隔离用例已清理', (await window.mcl.gamesList()).filter((x) => /^隔离/.test(x.name)).length);
+
       click('#nav button[data-view=server]');
       await sleep(400);
       step('服务器页标题', document.querySelector('#view-title').textContent);
@@ -380,6 +405,38 @@ async function runSelfTest() {
       step('Java 行数', document.querySelectorAll('#dl-java .core').length);
       step('有回收按钮', !!document.querySelector('#dl-clean'));
       step('下载页有整合包搜索框', !!document.querySelector('#mp-q'));
+
+      // 版本详情页：点版本名进去，开关切客户端/服务端，懒加载各核心的版本列表
+      const firstVn = document.querySelector('#dl-list .vn[data-open]');
+      step('版本行可点进详情', !!firstVn);
+      if (firstVn) {
+        const mcName = firstVn.dataset.open;
+        firstVn.click();
+        await sleep(400);
+        step('详情页已展开', document.querySelector('#dl-detail').hidden === false);
+        step('详情标题是版本号', document.querySelector('#dd-title').textContent === mcName);
+        step('五个核心加OptiFine', document.querySelectorAll('#dd-rows .dd-row').length);
+        step('默认在服务端档', document.querySelector('#dd-side button[data-side=server]').classList.contains('on'));
+        step('OptiFine 标了暂不支持', /暂不支持/.test((document.querySelector('#dd-rows .dd-row.dim') || {}).textContent || ''));
+        // 四个列表并行拉，等到都不再"获取中"为止
+        await until(() => !/获取中/.test(document.querySelector('#dd-rows').textContent), 60000);
+        step('四个列表都已落地', !/获取中/.test(document.querySelector('#dd-rows').textContent));
+        step('懒加载出下拉的核心数', document.querySelectorAll('#dd-rows select[data-ver]').length);
+        step('服务端档下 Paper 可装或有说明', (() => { const row = [...document.querySelectorAll('#dd-rows .dd-row')].find((r) => /^Paper/.test((r.querySelector('.dd-name b') || {}).textContent || '')); return !!row && (!!row.querySelector('[data-act="paper"]') || /没有|拿不到|错误|失败/.test(row.textContent)); })());
+        step('NeoForge 有结果或说明', (() => { const row = [...document.querySelectorAll('#dd-rows .dd-row')].find((r) => /NeoForge/.test(r.textContent)); return !!row && !/获取中/.test(row.textContent); })());
+        document.querySelector('#dd-side button[data-side=client]').click();
+        await sleep(300);
+        step('切客户端后 Paper 变灰', (() => { const row = [...document.querySelectorAll('#dd-rows .dd-row')].find((r) => /^Paper/.test((r.querySelector('.dd-name b') || {}).textContent || '')); return !!row && row.classList.contains('dim'); })());
+        step('客户端档可装 Fabric', !!document.querySelector('#dd-rows [data-act="fabric"]'));
+        document.querySelector('#dd-delete').click();
+        await until(() => document.querySelector('#modal').hidden === false, 20000);
+        step('删除确认框已开', document.querySelector('#modal').hidden === false);
+        step('确认框写明删什么', /会清除|没有下载过/.test(document.querySelector('#modal-body').textContent));
+        document.querySelector('#modal-cancel').click();
+        await sleep(200);
+        document.querySelector('#dd-back').click();
+        step('返回后详情页收起', document.querySelector('#dl-detail').hidden === true);
+      }
       if (DO_FULL) {
         // 异步入口的闸门：两个并发装同一个版本服务端，下载管理里只该出现一个任务
         const before = (await window.mcl.jobsList()).jobs.length;
@@ -503,6 +560,42 @@ ipcMain.handle('dl:installFabric', (_e, { mc, loader }) => gate.run(`fabric:${mc
 ipcMain.handle('dl:listPaper', (_e, mc) => installer.listPaper(mc));
 ipcMain.handle('dl:listFabric', (_e, mc) => installer.listFabric(mc));
 ipcMain.handle('dl:listForge', (_e, mc) => installer.listForge(mc));
+ipcMain.handle('dl:listNeoForge', (_e, mc) => installer.listNeoForge(mc));
+ipcMain.handle('dl:installNeoForge', (_e, { id, neoVersion, localInstaller }) => gate.run(`neoforge:${id}:${neoVersion}`, async () => {
+  const inst = store.get(id) || store.getGame(id);
+  const r = await installer.installNeoForge(inst, neoVersion, { localInstaller });
+  if (store.get(id)) store.patch(id, { core: 'neoforge', coreVersion: neoVersion, installed: true });
+  return r;
+}));
+// 详情页的"客户端加载器"：装进某个游戏档案（没有就新建一个），并把 loader 记到档案上
+ipcMain.handle('dl:installLoaderClient', (_e, { mc, core, version, gameId }) => gate.run(`loader-client:${mc}:${core}:${version}:${gameId || ''}`, async () => {
+  let g = gameId ? store.getGame(gameId) : null;
+  if (g && g.mcVersion !== mc) throw new Error(`「${g.name}」是 ${g.mcVersion} 的档案，装不了 ${mc} 的${core}`);
+  if (!g) {
+    const base = `${mc} ${core === 'fabric' ? 'Fabric' : core === 'neoforge' ? 'NeoForge' : 'Forge'}`;
+    let n = base;
+    for (let i = 2; store.games.some((x) => x.name === n); i++) n = `${base} ${i}`;
+    const one = { name: n, mcVersion: mc };
+    const shared = await sharedDir(mc, true);
+    if (shared) one.dir = shared;
+    g = store.createGame(one);
+  }
+  const dir = store.gameDir(g);
+  if (core === 'fabric') {
+    const f = await remote.fabricClientProfile(mc, version);
+    const loader = { type: 'fabric', version: f.version || version, json: f.json };
+    store.patchGame(g.id, { loader });
+    client.invalidate();
+    return { game: decorateGame(store.getGame(g.id)), note: f.note };
+  }
+  if (core === 'forge' || core === 'neoforge') {
+    const r = await installer.installForgeClient({ ...g, mcVersion: mc, dir }, version, { kind: core });
+    store.patchGame(g.id, { loader: r.loader });
+    client.invalidate();
+    return { game: decorateGame(store.getGame(g.id)), note: r.note };
+  }
+  throw new Error(`不支持的加载器 ${core}`);
+}));
 ipcMain.handle('dl:installForge', (_e, { id, forgeVersion, localInstaller }) => gate.run(`forge:${id}:${forgeVersion}`, async () => {
   const inst = store.get(id) || store.getGame(id);
   const r = await installer.installForge(inst, forgeVersion, { localInstaller });
@@ -615,6 +708,32 @@ ipcMain.handle('server:tail', (_e, { id, n = 400 }) => {
 });
 
 /* ---------------- 游戏档案 ---------------- */
+// 版本隔离策略（照 PCL2 五档）：只在【新建档案时】决定目录，并把算出来的路径写死进档案。
+// 之后改设置不会让已有档案的目录漂移 —— 否则用户的存档和模组会"凭空消失"。
+const ISO_SHARED = { off: '_共用', modded: '_原版共用', nonrelease: '_正式版共用', 'modded-nonrelease': '_正式版共用' };
+
+async function isReleaseVersion(mc) {
+  try {
+    const m = await remote.versionList();
+    const v = (m.versions || []).find((x) => x.id === mc);
+    return !v || v.type === 'release';   // 查不到就按正式版对待，别误判成快照
+  } catch { return true; }
+}
+
+// 返回应该使用的共享目录；null 表示按档案名独立目录
+async function sharedDir(mc, hasLoader) {
+  const mode = store.settings.isolation || 'all';
+  if (mode === 'all' || !mode) return null;
+  if (mode === 'off') return path.join(store.dirs.games, ISO_SHARED.off);
+  if (mode === 'modded') return hasLoader ? null : path.join(store.dirs.games, ISO_SHARED.modded);
+  if (mode === 'nonrelease') return (await isReleaseVersion(mc)) ? path.join(store.dirs.games, ISO_SHARED.nonrelease) : null;
+  if (mode === 'modded-nonrelease') {
+    if (hasLoader) return null;
+    return (await isReleaseVersion(mc)) ? path.join(store.dirs.games, ISO_SHARED['modded-nonrelease']) : null;
+  }
+  return null;
+}
+
 function decorateGame(g) {
   const dir = store.gameDir(g);
   const st = gameManager.state(g.id);
@@ -632,7 +751,14 @@ function decorateGame(g) {
 }
 
 ipcMain.handle('games:list', () => store.games.map(decorateGame));
-ipcMain.handle('games:create', (_e, input) => decorateGame(store.createGame(input)));
+ipcMain.handle('games:create', async (_e, input) => {
+  const one = { ...input };
+  if (!one.dir) {
+    const shared = await sharedDir(one.mcVersion || '1.21.1', !!(one.loader && one.loader.type && one.loader.type !== 'vanilla'));
+    if (shared) one.dir = shared;
+  }
+  return decorateGame(store.createGame(one));
+});
 ipcMain.handle('games:patch', (_e, { id, patch }) => decorateGame(store.patchGame(id, patch)));
 ipcMain.handle('games:remove', (_e, { id, deleteFiles }) => {
   const st = gameManager.state(id);
@@ -659,10 +785,10 @@ ipcMain.handle('games:import', (_e, input) => gate.run(`import:${input.dir}:${in
   if (!v) throw new Error('这个目录里没找到任何版本（要有 versions/<版本>/<版本>.json）');
   if (!v.mc) throw new Error(`${v.id} 认不出对应的 Minecraft 版本`);
   let loader = null;
-  if (v.loader && (v.loader.type === 'fabric' || v.loader.type === 'forge')) {
+  if (v.loader && (v.loader.type === 'fabric' || v.loader.type === 'forge' || v.loader.type === 'neoforge')) {
     loader = { type: v.loader.type, version: v.loader.version, json: v.json };
   } else if (v.loader) {
-    throw new Error(`${v.loader.type} 的目录还不能直接导入启动，目前支持原版 / Fabric / Forge`);
+    throw new Error(`${v.loader.type} 的目录还不能直接导入启动，目前支持原版 / Fabric / Forge / NeoForge`);
   }
   const g = store.createGame({
     name: input.name || p.name.replace(/^\.+/, '') || '导入的游戏',
@@ -691,14 +817,17 @@ async function installModpackFrom({ file, gameId, name, withAssets = true }) {
   return gate.run(`modpack:${file}:${gameId || ''}`, async () => {
     const info = modpack.summarize(file);
     if (!info.mc) throw new Error('整合包没写明要哪个 Minecraft 版本（dependencies.minecraft）');
-    if (info.loader.type === 'neoforge' || info.loader.type === 'quilt') throw new Error(`${info.loader.type} 整合包还不能自动装，目前支持原版 / Fabric / Forge`);
+    if (info.loader.type === 'quilt') throw new Error('Quilt 整合包还不能自动装，目前支持原版 / Fabric / Forge / NeoForge');
     let g = gameId ? store.getGame(gameId) : null;
     if (g && g.mcVersion !== info.mc) throw new Error(`「${g.name}」是 ${g.mcVersion} 的档案，这个整合包要 ${info.mc} —— 换成新建档案来装`);
     if (!g) {
       const base = (name || info.name || '整合包').trim();
       let n = base;
       for (let i = 2; store.games.some((x) => x.name === n); i++) n = `${base} ${i}`;
-      g = store.createGame({ name: n, mcVersion: info.mc });
+      const one = { name: n, mcVersion: info.mc };
+      const shared = await sharedDir(info.mc, info.loader.type !== 'vanilla');
+      if (shared) one.dir = shared;
+      g = store.createGame(one);
     }
     const r = await installer.installModpack({ file, game: g, withAssets });
     return { ...r, game: decorateGame(r.game) };
@@ -712,6 +841,80 @@ ipcMain.handle('modpack:installUrl', async (_e, { url, fileName, gameId, name })
   const { file } = await remote.downloadFileTo(url, dir, fileName);
   return installModpackFrom({ file, gameId, name });
 });
+
+// 删除前的预览：把会一起没了的存档、模组、资源包列清楚（照 PCL2 的确认框，但多标一层"目录被共用"）
+ipcMain.handle('dl:deletePreview', (_e, mc) => {
+  const dirOf = new Map();
+  for (const g of store.games) {
+    const d = store.gameDir(g);
+    dirOf.set(d, (dirOf.get(d) || 0) + 1);
+  }
+  const count = (dir, sub, re) => { try { return fs.readdirSync(path.join(dir, sub)).filter((f) => !re || re.test(f)).length; } catch { return 0; } };
+  const games = store.games.filter((g) => g.mcVersion === mc).map((g) => {
+    const dir = store.gameDir(g);
+    let saves = [];
+    try {
+      saves = fs.readdirSync(path.join(dir, 'saves'), { withFileTypes: true })
+        .filter((d) => d.isDirectory() && !d.name.startsWith('.'))
+        .map((d) => {
+          const p = path.join(dir, 'saves', d.name);
+          let name = d.name;
+          try { name = (JSON.parse(safeRead(path.join(p, 'level.dat')) || '{}').LevelName) || d.name; } catch { /* 读不出来就用文件夹名 */ }
+          return { folder: d.name, name, at: fs.statSync(p).mtimeMs, bytes: dirSizeSync(p) };
+        })
+        .sort((a, b) => b.at - a.at);
+    } catch { /* 没存档 */ }
+    return {
+      id: g.id, name: g.name, dir,
+      shared: (dirOf.get(dir) || 1) > 1,
+      loader: g.loader && g.loader.type !== 'vanilla' ? g.loader.type : '',
+      saves,
+      mods: count(dir, 'mods', /\.(jar|zip)$/i),
+      resourcepacks: count(dir, 'resourcepacks', /\.zip$/i),
+      shaderpacks: count(dir, 'shaderpacks', /\.zip$/i),
+      bytes: fs.existsSync(dir) ? dirSizeSync(dir) : 0,
+    };
+  });
+  const installed = catalog.listInstalledVersions().find((v) => v.mc === mc);
+  return {
+    mc,
+    version: installed ? { bytes: installed.bytes, server: installed.server, client: installed.client } : null,
+    purge: (() => {
+      const t = [['版本 jar 与版本信息', catalog.versionDir(mc)], ['Paper', path.join(store.dirs.paper, mc)], ['Fabric', path.join(store.dirs.fabric, mc)], ['Forge', path.join(store.dirs.forge, mc)], ['NeoForge', path.join(store.dirs.neoforge, mc)]];
+      return t.filter(([, d]) => fs.existsSync(d)).map(([label, d]) => ({ label, bytes: dirSizeSync(d) }));
+    })(),
+    games,
+  };
+});
+
+// 执行清除：purge=只删这个版本下载的文件（不碰 Java、不碰共享库）；withGames=连档案目录一起删
+ipcMain.handle('dl:purgeVersion', (_e, { mc, withGames = false }) => gate.run(`purge:${mc}`, () => {
+  const r = catalog.purgeVersion(mc);
+  const removed = [];
+  const kept = [];
+  if (withGames) {
+    const dirCount = new Map();
+    for (const g of store.games) {
+      const d = store.gameDir(g);
+      dirCount.set(d, (dirCount.get(d) || 0) + 1);
+    }
+    const gamesRoot = path.resolve(store.dirs.games);
+    for (const g of store.games.filter((x) => x.mcVersion === mc)) {
+      const dir = store.gameDir(g);
+      const ours = path.resolve(path.dirname(dir)) === gamesRoot;
+      if (!ours) { kept.push({ name: g.name, dir, why: '导入的目录，只删档案不删文件' }); }
+      else if ((dirCount.get(dir) || 1) > 1) { kept.push({ name: g.name, dir, why: '目录被多个档案共用，删了会连别人的存档一起没' }); }
+      else { removed.push({ name: g.name, dir, bytes: dirSizeSync(dir) }); }
+      store.removeGame(g.id, { deleteFiles: false });
+    }
+    for (const it of removed) {
+      try { fs.rmSync(it.dir, { recursive: true, force: true }); }
+      catch { it.kept = true; it.why = '有文件被占用没删掉'; kept.push({ name: it.name, dir: it.dir, why: it.why }); }
+    }
+  }
+  client.invalidate();
+  return { ...r, removed, kept };
+}));
 
 /* ---------------- 杂项 ---------------- */
 ipcMain.handle('props:read', (_e, id) => {

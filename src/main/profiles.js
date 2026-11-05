@@ -24,9 +24,11 @@ class Catalog {
   constructor(dirs) {
     this.dirs = dirs;
     this.extractCache = new Map();
+    this.settings = null;   // 用 boot() 里挂的 isolationMode() 读，别缓存 store.settings（patchSettings 会整体换对象）
     this.paperIndex = readJson(path.join(dirs.paper, 'index.json'), {});
     this.fabricIndex = readJson(path.join(dirs.fabric, 'index.json'), {});
     this.forgeIndex = readJson(path.join(dirs.forge, 'index.json'), {});
+    this.neoforgeIndex = (readJson(path.join(dirs.neoforge, 'index.json'), {}) || {}).byMc || {};
   }
 
   versionDir(mc) { return path.join(this.dirs.versions, mc); }
@@ -57,6 +59,40 @@ class Catalog {
     return isReady(p) ? p : null;
   }
 
+  // 隔离策略（照 PCL2 的五档）决定库放哪：
+  //   off=全共享；all=全隔离；modded=带加载器的版本隔离；nonrelease=非正式版隔离；modded-nonrelease=两者之一
+  versionIsRelease(mc) {
+    try {
+      const t = readJson(this.versionJsonPath(mc), {}).type;
+      return !t || t === 'release';
+    } catch { return true; }
+  }
+
+  hasLoader(mc) {
+    return !!(this.fabricIndex[mc] || this.neoforgeIndex[mc] || (this.forgeIndex[mc] && this.forgeIndex[mc].length));
+  }
+
+  isolatedFor(mc, { loader = false } = {}) {
+    const mode = (typeof this.isolationMode === 'function' ? this.isolationMode() : 'all') || 'all';
+    if (mode === 'off') return false;
+    if (mode === 'all') return true;
+    const modded = loader || this.hasLoader(mc);
+    if (mode === 'modded') return modded;
+    if (mode === 'nonrelease') return !this.versionIsRelease(mc);
+    if (mode === 'modded-nonrelease') return modded || !this.versionIsRelease(mc);
+    return false;
+  }
+
+  // 隔离时加载器/版本的库放版本目录里，删版本就能彻底回收；共享池仍作只读回退，避免老数据重下
+  versionLibDir(mc) { return path.join(this.versionDir(mc), 'libraries'); }
+
+  libRoots(mc, gameDir) {
+    const out = [];
+    if (gameDir) out.push(path.join(gameDir, 'libraries'));
+    if (mc && this.isolatedFor(mc)) out.push(this.versionLibDir(mc));
+    return out;
+  }
+
   checkLibs(libs, extraRoots = []) {
     const missing = [];
     const resolved = [];
@@ -80,7 +116,7 @@ class Catalog {
       out = { mc, dir: dest, mainClass: r.mainClass || VANILLA_SERVER_MAIN, cp: r.cp, source: 'bundler', missing: [], javaMajor: this.safeJavaMajor(mc), note: r.cached ? `${mc} 依赖已解包，直接复用` : `${mc} 首次解包 ${r.count} 个内嵌 jar（各服共用）` };
     } catch (e) {
       const prof = resolveProfile(this.versionJson(mc), { server: true });
-      const check = this.checkLibs(prof.libraries);
+      const check = this.checkLibs(prof.libraries, this.libRoots(mc));
       let main = prof.mainClass;
       if (!main || /client\.main\.Main$/.test(main)) main = VANILLA_SERVER_MAIN;
       out = { mc, dir: this.dirs.libraries, mainClass: main, cp: [...check.resolved, jar], source: 'libs', missing: check.missing, javaMajor: prof.javaMajor || this.safeJavaMajor(mc), note: `非 bundler 格式，走外部库（缺 ${check.missing.length} 个需下载）：${e.message}` };
@@ -97,7 +133,7 @@ class Catalog {
     const p = path.join(this.dirs.fabric, mc, 'server-profile.json');
     if (!isReady(p)) return null;
     const prof = resolveProfile(JSON.parse(fs.readFileSync(p, 'utf8')), { server: false });
-    const check = this.checkLibs(prof.libraries);
+    const check = this.checkLibs(prof.libraries, this.libRoots(mc));
     return { mainClass: prof.mainClass, loader: info.loader, resolved: check.resolved, missing: check.missing, note: `Fabric loader ${info.loader}（${check.resolved.length}/${prof.libraries.length} 个库就绪）` };
   }
 
@@ -140,6 +176,45 @@ class Catalog {
     if (left) throw new Error(`${mc} 还有 ${(left / 1048576).toFixed(1)}MB 删不掉——这个版本正被运行中的服务器或游戏占用，先停掉再删`);
     this.extractCache.delete(mc);
     return { removed: true, bytes };
+  }
+
+  // 版本详情页的「清除本版本文件」：只删这个版本自己的东西。
+  // 不碰 runtime（Java 是多版本共用的），也不碰 libraries/assets（共享库交给「回收无用依赖」处理）
+  purgeVersion(mc) {
+    const targets = [
+      ['版本 jar 与版本信息', this.versionDir(mc)],
+      ['Paper', path.join(this.dirs.paper, mc)],
+      ['Fabric', path.join(this.dirs.fabric, mc)],
+      ['Forge', path.join(this.dirs.forge, mc)],
+      ['NeoForge', path.join(this.dirs.neoforge, mc)],
+    ];
+    const out = [];
+    let bytes = 0;
+    for (const [label, dir] of targets) {
+      if (!isReady(dir)) continue;
+      const size = dirSize(dir);
+      try {
+        fs.rmSync(dir, { recursive: true, force: true });
+      } catch { /* 占用 */ }
+      if (isReady(dir)) throw new Error(`${label}（${mc}）有文件被占用删不掉——先停掉在用这个版本的服务器或游戏`);
+      bytes += size;
+      out.push({ label, bytes: size });
+      if (label === '版本 jar 与版本信息') this.extractCache.delete(mc);
+    }
+    // 加载器索引里把这个版本摘掉，免得界面还显示"已装"
+    for (const [key, idx] of [['paper', this.paperIndex], ['fabric', this.fabricIndex], ['forge', this.forgeIndex]]) {
+      if (idx[mc]) {
+        delete idx[mc];
+        try { writeJson(path.join(this.dirs[key], 'index.json'), idx); } catch { /* 索引写不回就下次重算 */ }
+      }
+    }
+    const neoFile = path.join(this.dirs.neoforge, 'index.json');
+    const neo = readJson(neoFile, null);
+    if (neo && neo.byMc && neo.byMc[mc]) {
+      delete neo.byMc[mc];
+      try { writeJson(neoFile, neo); } catch { /* 同上 */ }
+    }
+    return { mc, bytes, parts: out };
   }
 
   // 当前所有已装内容仍然需要的库路径集合
@@ -255,6 +330,11 @@ function readJson(p, fallback) {
   try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return fallback; }
 }
 
+function writeJson(p, obj) {
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, JSON.stringify(obj, null, 2));
+}
+
 // 给 Paper 的 Paperclip 铺 Mojang 目录结构（硬链接，几乎不占额外空间）
 function ensureVanillaLayout(catalog, instanceDir, mc) {
   const v = catalog.vanilla(mc);
@@ -338,16 +418,16 @@ function buildPlan({ instance, settings, catalog }) {
     return { core, cwd: dir, jvm, cp: [...f.resolved, ...v.cp], jar: null, mainClass: f.mainClass, gameArgs, javaMajorWanted: v.javaMajor, note: `${f.note} + 原版内嵌库 ${v.cp.length} 个` };
   }
 
-  if (core === 'forge') {
-    const argsFile = findForgeArgsFile(dir);
-    if (!argsFile) throw new Error('这个实例还没装 Forge，去「下载」页点「安装 Forge」（要联网拉依赖）');
+  if (core === 'forge' || core === 'neoforge') {
+    const argsFile = findForgeArgsFile(dir, core);
+    if (!argsFile) throw new Error(`这个实例还没装 ${core === 'neoforge' ? 'NeoForge' : 'Forge'}，去版本详情页点安装（要联网拉依赖）`);
     const jvmFile = writeUserJvmArgs(dir, jvm);
     const v = catalog.vanilla(mc);
     return {
-      core: 'forge', cwd: dir, jvm: [], cp: [], jar: null, mainClass: null, gameArgs: [],
+      core, cwd: dir, jvm: [], cp: [], jar: null, mainClass: null, gameArgs: [],
       forgeArgs: [`@${rel(dir, jvmFile)}`, `@${rel(dir, argsFile)}`, 'nogui'],
       javaMajorWanted: v.javaMajor,
-      note: `Forge 用官方生成的相对路径参数文件启动（${path.basename(argsFile)}）`,
+      note: `${core === 'neoforge' ? 'NeoForge' : 'Forge'} 用官方生成的相对路径参数文件启动（${path.basename(argsFile)}）`,
     };
   }
 
@@ -394,18 +474,23 @@ function writeArgfile(dir, lines) {
   return file;
 }
 
-function findForgeArgsFile(dir) {
-  const root = path.join(dir, 'libraries', 'net', 'minecraftforge', 'forge');
-  let versions = [];
-  try { versions = fs.readdirSync(root); } catch { return null; }
-  for (const v of versions) {
-    const d = path.join(root, v);
-    let files = [];
-    try { files = fs.readdirSync(d).filter((f) => /args\.txt$/.test(f)); } catch { continue; }
-    // Forge 给的是 win_args.txt / unix_args.txt（老版本叫 win32_x86_64_args.txt），必须挑 Windows 那份
-    const win = files.filter((f) => /^win/i.test(f));
-    const prefer = win.find((f) => /64/.test(f)) || win[0] || files.find((f) => !/^unix/i.test(f)) || files[0];
-    if (prefer) return path.join(d, prefer);
+// Forge 与 NeoForge 的安装器都会生成一份 win_args.txt，只是 groupId 不同
+function findForgeArgsFile(dir, kind) {
+  const roots = kind === 'neoforge'
+    ? [path.join(dir, 'libraries', 'net', 'neoforged', 'neoforge')]
+    : [path.join(dir, 'libraries', 'net', 'minecraftforge', 'forge'), path.join(dir, 'libraries', 'net', 'neoforged', 'neoforge')];
+  for (const root of roots) {
+    let versions = [];
+    try { versions = fs.readdirSync(root); } catch { continue; }
+    for (const v of versions) {
+      const d = path.join(root, v);
+      let files = [];
+      try { files = fs.readdirSync(d).filter((f) => /args\.txt$/.test(f)); } catch { continue; }
+      // 给的是 win_args.txt / unix_args.txt（老版本叫 win32_x86_64_args.txt），必须挑 Windows 那份
+      const win = files.filter((f) => /^win/i.test(f));
+      const prefer = win.find((f) => /64/.test(f)) || win[0] || files.find((f) => !/^unix/i.test(f)) || files[0];
+      if (prefer) return path.join(d, prefer);
+    }
   }
   return null;
 }

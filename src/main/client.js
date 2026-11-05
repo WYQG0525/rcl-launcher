@@ -37,8 +37,9 @@ class ClientStore {
     if (!fresh && this._st && this._st.mc === mc && Date.now() - this._st.at < 20000) return this._st.v;
     const j = this.versionJson(mc);
     const jar = this.clientJar(mc);
+    const roots = this.catalog.libRoots(mc);
     const prof = resolveProfile(j, { server: false });
-    const have = prof.libraries.filter((l) => !!this.catalog.findLib(l.path));
+    const have = prof.libraries.filter((l) => !!this.catalog.findLib(l.path, roots));
     const indexFile = path.join(this.assetsRoot(), 'indexes', `${j.assets}.json`);
     let assetTotal = 0, assetHave = 0, assetCount = 0;
     if (isReady(indexFile)) {
@@ -58,7 +59,7 @@ class ClientStore {
       jarReady: isReady(jar),
       jarSize: (j.downloads && j.downloads.client && j.downloads.client.size) || 0,
       libs: { total: prof.libraries.length + natJars.length, have: have.length + natJars.filter((p) => p).length, missing: prof.libraries.length - have.length + natJars.filter((p) => !p).length },
-      missingBytes: prof.libraries.filter((l) => !this.catalog.findLib(l.path)).reduce((s, l) => s + (l.size || 0), 0) + (isReady(jar) ? 0 : ((j.downloads && j.downloads.client && j.downloads.client.size) || 0)),
+      missingBytes: prof.libraries.filter((l) => !this.catalog.findLib(l.path, roots)).reduce((s, l) => s + (l.size || 0), 0) + (isReady(jar) ? 0 : ((j.downloads && j.downloads.client && j.downloads.client.size) || 0)),
       assets: { ready: assetCount > 0 && assetHave === assetTotal, known: assetCount > 0, indexId: j.assets, files: assetCount, total: assetTotal, have: assetHave },
       complete: isReady(jar) && have.length === prof.libraries.length && natJars.every((p) => !!p) && assetCount > 0 && assetHave === assetTotal,
     };
@@ -156,6 +157,8 @@ class ClientStore {
       const d = path.join(game.dir, 'libraries');
       if (fs.existsSync(d)) out.push(d);
     }
+    // 隔离策略开着时，这个版本自己的库目录也在查找路径里（共享池作只读回退）
+    for (const r of this.catalog.libRoots(game ? game.mcVersion : '', null)) if (!out.includes(r)) out.push(r);
     return out;
   }
 

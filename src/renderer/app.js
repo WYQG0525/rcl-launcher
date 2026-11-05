@@ -10,6 +10,13 @@ const CORE_NAME = { vanilla: '原版', paper: 'Paper', fabric: 'Fabric', forge: 
 const AUTH_NAME = { offline: '离线登录', microsoft: '微软正版', aai: '第三方（LittleSkin 等）' };
 const LOADER_NAME = { vanilla: '原版', fabric: 'Fabric', forge: 'Forge', neoforge: 'NeoForge', quilt: 'Quilt' };
 const loaderTag = (g) => (g.loader && g.loader.type && g.loader.type !== 'vanilla' ? ` · ${LOADER_NAME[g.loader.type] || g.loader.type}` : '') + (g.dir && g.imported ? ' · 导入' : '');
+// 目录被多个档案共用时标一下（版本隔离设成"共用"时就是这个状态），免得用户以为存档丢了
+const sharedDirs = () => {
+  const c = new Map();
+  for (const g of S.games) c.set(g.dir, (c.get(g.dir) || 0) + 1);
+  return c;
+};
+const dirTag = (g) => ((sharedDirs().get(g.dir) || 1) > 1 ? ' · 共用目录' : '');
 const QUICK = ['list', 'stop', 'save-all', 'save-on', 'say ', 'whitelist add ', 'whitelist on', 'op ', 'deop ', 'gamemode survival @a', 'weather clear', 'time set day', 'kick '];
 const VIEWS = ['game', 'server', 'dl', 'jobs', 'content', 'settings'];
 const PAGE = 40;   // 内容搜索每页条数
@@ -206,7 +213,7 @@ function renderGameList() {
   box.innerHTML = S.games.map((g) => {
     const st = S.gameStates.get(g.id) || { state: 'stopped' };
     return `<div class="pcard ${g.id === S.selGame ? 'on' : ''}" data-id="${g.id}">
-      <b>${esc(g.name)}</b><span><i class="dot ${st.state}"></i>${esc(g.mcVersion)} · ${esc(g.username)} · ${AUTH_NAME[g.authType || 'offline'].split('（')[0]}${loaderTag(g)}</span>
+      <b>${esc(g.name)}</b><span><i class="dot ${st.state}"></i>${esc(g.mcVersion)} · ${esc(g.username)} · ${AUTH_NAME[g.authType || 'offline'].split('（')[0]}${loaderTag(g)}${dirTag(g)}</span>
     </div>`;
   }).join('') + '<div class="pcard add" id="btn-new-game">＋ 新建游戏档案</div>';
   for (const el of box.querySelectorAll('.pcard[data-id]')) el.onclick = () => { S.selGame = el.dataset.id; renderGameList(); renderGameHero(); renderGameRes(); switchGTab(S.gtab); refreshClientStatus(game().mcVersion); };
@@ -223,6 +230,7 @@ function renderGameHero() {
     `<span class="badge">${AUTH_NAME[g.authType || 'offline']}</span>`,
     g.loader && g.loader.type !== 'vanilla' ? `<span class="badge acc">${LOADER_NAME[g.loader.type] || g.loader.type} ${esc(g.loader.version || '')}</span>` : '',
     g.imported ? '<span class="badge">导入的目录</span>' : '',
+    dirTag(g) ? '<span class="badge warn">与其它档案共用目录</span>' : '',
     `<span class="badge">${g.memoryMB || S.settings.memoryMB} MB</span>`,
     g.fullscreen ? '<span class="badge">全屏</span>' : `<span class="badge">${g.width}×${g.height}</span>`,
     `<span class="badge ${st.state === 'running' ? 'ok' : ''}">${{ starting: '启动中', running: '运行中', stopped: '未运行' }[st.state]}</span>`,
@@ -1022,7 +1030,7 @@ function renderDlList() {
   box.innerHTML = list.slice(0, 300).map((v) => {
     const has = local.get(v.id);
     return `<div class="vrow">
-      <div class="vn">${esc(v.id)}</div>
+      <div class="vn link" data-open="${esc(v.id)}" title="点进去看这个版本能装什么">${esc(v.id)} ▸</div>
       <div class="vt">${v.type === 'release' ? '正式版' : v.type === 'snapshot' ? '快照' : v.type}</div>
       <div class="vs">${has ? `已下 ${MB(has.bytes)}（服务端 ${has.server ? '有' : '无'} / 客户端 ${has.client ? '有' : '无'}）` : new Date(v.releaseTime).toLocaleDateString()}</div>
       <div class="va">
@@ -1038,6 +1046,7 @@ function renderDlList() {
   const done = (b, ok, msg) => { b.disabled = false; b.textContent = b.dataset.old; ok ? toast(msg, 'ok') : err(new Error(msg)); };
   const bind = (sel, fn) => { for (const b of box.querySelectorAll(sel)) b.onclick = async () => { busy(b, '下载中…'); try { const m = await fn(b.dataset.srv || b.dataset.cli || b.dataset.pap || b.dataset.fab || b.dataset.fge); done(b, true, m); await refreshLocal(); renderDlLocal(); renderDlList(); } catch (e) { done(b, false, e.message); } }; };
   bind('[data-srv]', async (mc) => { const r = await api.dlInstallServer(mc); return `${mc} 服务端已就位`; });
+  for (const el of box.querySelectorAll('.vn[data-open]')) el.onclick = () => openDetail(el.dataset.open);
   bind('[data-cli]', async (mc) => { const r = await api.dlInstallClient(mc); return r.ready ? `${mc} 客户端完整` : `${mc} 客户端下载完，但还差文件`; });
   bind('[data-pap]', async (mc) => { const r = await api.dlInstallPaper({ mc }); return `Paper ${mc} build ${r.build} 已就位（${MB(r.size)}）`; });
   bind('[data-fab]', async (mc) => { const r = await api.dlInstallFabric({ mc }); return `Fabric ${mc} loader ${r.loader} 已就位`; });
@@ -1056,6 +1065,178 @@ function renderDlList() {
     await refreshInstances();
     return r.note;
   });
+}
+
+/* ---------------- 下载页：版本详情页（照 PCL2：点版本看能装什么）---------------- */
+const DD = { mc: '', side: 'server', lists: {}, loading: {} };
+const CORES = [
+  { id: 'vanilla', label: '原版', note: 'Mojang 官方文件' },
+  { id: 'paper', label: 'Paper', note: '服务端核心，自带推荐 JVM 参数' },
+  { id: 'fabric', label: 'Fabric', note: '轻量模组加载器' },
+  { id: 'forge', label: 'Forge', note: '老牌模组加载器' },
+  { id: 'neoforge', label: 'NeoForge', note: '1.20.4 起的 Forge 分支' },
+  { id: 'optifine', label: 'OptiFine', note: '暂不支持：官方只发带 GUI 的安装器，无头打补丁还没做' },
+];
+
+function ago(ms) {
+  const d = Date.now() - ms;
+  const day = 86400000;
+  if (d < day) return '今天';
+  if (d < 31 * day) return Math.round(d / day) + ' 天前';
+  if (d < 366 * day) return Math.round(d / (31 * day)) + ' 个月前';
+  return Math.round(d / (366 * day)) + ' 年前';
+}
+
+function openDetail(mc) {
+  DD.mc = mc;
+  DD.side = 'server';
+  DD.lists = {};
+  DD.loading = {};
+  $('#dl-detail').hidden = false;
+  $('#dd-title').textContent = mc;
+  paintDetail();
+  loadCoreLists(mc);
+  $('#dl-detail').scrollIntoView({ block: 'nearest' });
+}
+
+function closeDetail() { $('#dl-detail').hidden = true; DD.mc = ''; }
+
+async function loadCoreLists(mc) {
+  const fetchers = {
+    paper: async () => { const r = await api.dlListPaper(mc); return { options: (r.builds || []).map(String), recommended: String(r.installed || (r.builds || [])[0] || ''), error: r.error || '' }; },
+    fabric: async () => { const r = await api.dlListFabric(mc); return { options: (r.loaders || []).map((l) => l.loader), recommended: String(r.installed || (r.loaders || [])[0].loader || ''), error: r.error || '' }; },
+    forge: async () => { const r = await api.dlListForge(mc); return { options: (r.versions || []).map(String), recommended: String(r.recommended || ''), error: r.error || '' }; },
+    neoforge: async () => { const r = await api.dlListNeoForge(mc); return { options: (r.versions || []).map(String), recommended: String(r.recommended || ''), error: r.error || r.note || '' }; },
+  };
+  // 四个列表并行拉：串行等的话 NeoForge 前面几个要十几秒才出来，界面像卡住了
+  for (const id of Object.keys(fetchers)) {
+    DD.loading[id] = true;
+    fetchers[id]()
+      .then((v) => { DD.lists[id] = v; })
+      .catch((e) => { DD.lists[id] = { options: [], recommended: '', error: e.message }; })
+      .finally(() => { DD.loading[id] = false; if (DD.mc === mc) paintDetail(); });
+  }
+  paintDetail();
+}
+
+function paintDetail() {
+  const box = $('#dd-rows');
+  if (!box || !DD.mc) return;
+  for (const b of $$('#dd-side button')) b.classList.toggle('on', b.dataset.side === DD.side);
+  const local = ((S.info.local || {}).versions || []).find((v) => v.mc === DD.mc);
+  const installed = { paper: ((S.info.local || {}).paper || []).find((p) => p.mc === DD.mc), fabric: ((S.info.local || {}).fabric || []).find((f) => f.mc === DD.mc) };
+  box.innerHTML = CORES.map((c) => {
+    const isServerOnly = c.id === 'paper';
+    const dim = (c.id === 'optifine') || (DD.side === 'client' && isServerOnly);
+    let right = '';
+    if (c.id === 'vanilla') {
+      const st = local ? `服务端 ${local.server ? '有' : '无'} · 客户端 ${local.client ? '有' : '无'} · 合计 ${MB(local.bytes || 0)}` : '还没下载过';
+      right = `<div class="dd-st">${st}</div><button class="cta sm" data-act="vanilla">${DD.side === 'server' ? '下载服务端' : '下载客户端'}</button>`;
+    } else if (c.id === 'optifine') {
+      right = `<div class="dd-st warn">暂不支持</div>`;
+    } else if (DD.side === 'client' && isServerOnly) {
+      right = `<div class="dd-st">服务端核心，切到服务端再装</div>`;
+    } else {
+      const list = DD.lists[c.id];
+      if (!list) right = `<div class="dd-st">获取中……</div>`;
+      else if (list.error && !list.options.length) right = `<div class="dd-st warn">${esc(list.error)}</div>`;
+      else if (!list.options.length) right = `<div class="dd-st">${esc(list.error || '这个版本没有对应的构建')}</div>`;
+      else {
+        const opts = list.options.slice(0, 40);
+        right = `<select class="mini" data-ver="${c.id}">${opts.map((v) => `<option value="${esc(v)}"${v === list.recommended ? ' selected' : ''}>${esc(v)}${v === list.recommended ? '（推荐）' : ''}</option>`).join('')}</select>
+          <button class="cta sm" data-act="${c.id}">${DD.side === 'server' ? '装到当前实例' : '装成游戏档案'}</button>`;
+      }
+    }
+    const ready = c.id === 'paper' ? (installed.paper && installed.paper.ready) : c.id === 'fabric' ? (installed.fabric && installed.fabric.ready) : null;
+    return `<div class="dd-row${dim ? ' dim' : ''}">
+        <div class="dd-name"><b>${c.label}</b><em>${esc(c.note)}</em>${ready ? '<span class="badge-mini">已装</span>' : ''}</div>
+        <div class="dd-act">${right}</div>
+      </div>`;
+  }).join('') + `<div class="dd-foot">
+      <button class="ghost sm" id="dd-refresh">重新取列表</button>
+      <span class="spacer"></span>
+      <button class="danger sm" id="dd-delete">删除本版本文件…</button>
+    </div>`;
+  for (const b of box.querySelectorAll('[data-act]')) b.onclick = () => detailInstall(b.dataset.act, b);
+  const rf = box.querySelector('#dd-refresh');
+  if (rf) rf.onclick = () => { DD.lists = {}; loadCoreLists(DD.mc); };
+  const del = box.querySelector('#dd-delete');
+  if (del) del.onclick = detailDelete;
+  $('#dd-hint').textContent = DD.side === 'server' ? '服务端：装到当前选中的服务器实例' : '客户端：装成独立的游戏档案';
+}
+
+async function detailInstall(core, btn) {
+  const mc = DD.mc;
+  const sel = $(`#dd-rows [data-ver="${core}"]`);
+  const version = sel ? sel.value : '';
+  const old = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '进行中…';
+  try {
+    let msg;
+    if (core === 'vanilla') {
+      if (DD.side === 'server') { await api.dlInstallServer(mc); msg = `${mc} 服务端与依赖已就位`; }
+      else { const r = await api.dlInstallClient(mc); msg = r.ready ? `${mc} 客户端完整` : `${mc} 客户端下完了，但还差文件`; }
+    } else if (DD.side === 'server') {
+      if (core === 'paper') { const r = await api.dlInstallPaper({ mc, build: version ? Number(version) : undefined }); msg = `Paper ${mc} build ${r.build} 已就位`; }
+      else if (core === 'fabric') { const r = await api.dlInstallFabric({ mc, loader: version }); msg = `Fabric ${mc} loader ${r.loader} 已就位`; }
+      else {
+        const inst = S.instances.find((i) => i.id === S.sel) || S.instances[0];
+        if (!inst) throw new Error(`${core === 'forge' ? 'Forge' : 'NeoForge'} 服务端要装进具体实例 —— 先去「开服务器」建一个${mc} 的实例再回来`);
+        const r = core === 'forge' ? await api.dlInstallForge({ id: inst.id, forgeVersion: version }) : await api.dlInstallNeoForge({ id: inst.id, neoVersion: version });
+        await refreshInstances();
+        msg = `${r.note}（装到「${inst.name}」）`;
+      }
+    } else {
+      const g = S.games.find((x) => x.id === S.selGame && x.mcVersion === mc) || null;
+      const r = await api.dlInstallLoaderClient({ mc, core, version, gameId: g ? g.id : undefined });
+      await refreshGames();
+      msg = `${r.note}（档案「${r.game.name}」）`;
+    }
+    toast(msg, 'ok');
+    await refreshLocal();
+    renderDlLocal();
+    renderDlList();
+    paintDetail();
+  } catch (e) { err(e); } finally { btn.disabled = false; btn.textContent = old; }
+}
+
+async function detailDelete() {
+  const mc = DD.mc;
+  let p;
+  try { p = await api.dlDeletePreview(mc); } catch (e) { return err(e); }
+  const parts = (p.purge || []).map((x) => `${x.label} ${MB(x.bytes)}`).join(' · ');
+  const total = (p.purge || []).reduce((s, x) => s + x.bytes, 0);
+  const saveTotal = p.games.reduce((s, g) => s + g.saves.length, 0);
+  let body = `<div class="card note"><b>你确定要删除版本 ${esc(mc)} 吗？</b><br>`;
+  body += parts ? `会清除已下载的文件：${esc(parts)}（合计 ${MB(total)}）<br>` : '这个版本没有下载过文件。<br>';
+  body += p.games.length ? '该版本对应的<b>存档、资源包、Mod 等文件也可能被一并删除</b>！' : '这个版本没有关联的游戏档案。';
+  body += '</div>';
+  for (const g of p.games) {
+    body += `<div class="card" style="margin-top:9px">
+      <b>${esc(g.name)}</b>${g.loader ? ` · ${LOADER_NAME[g.loader] || g.loader}` : ''}${g.shared ? ' · <span class="warn">目录被多个档案共用，只删档案不删文件</span>' : ''}
+      ${g.saves.length ? `<div class="dd-saves"><div class="hint">这会删除以下存档：</div><ul>${g.saves.map((s) => `<li>${esc(s.name)} <em>（上次修改：${ago(s.at)}）</em></li>`).join('')}</ul></div>` : '<div class="hint">没有存档</div>'}
+      <div class="hint">mods ${g.mods} 个 · 资源包 ${g.resourcepacks} 个 · 光影 ${g.shaderpacks} 个 · 目录合计 ${MB(g.bytes)}</div>
+    </div>`;
+  }
+  if (p.games.length) {
+    body += formHtml([{ label: '连档案目录一起删', key: 'withGames', type: 'checkbox', value: false, checkText: `删掉 ${p.games.filter((x) => !x.shared).length} 个独占目录（${saveTotal} 个存档，${MB(p.games.filter((x) => !x.shared).reduce((s, x) => s + x.bytes, 0))}）；共用的目录只删档案不动文件`, full: true }]);
+  }
+  body += '<div class="hint" style="padding-top:8px">Java 运行时和共享库不在这里删 —— 库请到「本地已有」旁的「回收无用依赖」，只清真没人引用的。</div>';
+  const v = await modal('版本删除确认', body, '确定删除');
+  if (!v) return;
+  try {
+    const r = await api.dlPurgeVersion({ mc, withGames: !!v.withGames });
+    await refreshLocal();
+    await refreshGames();
+    renderDlLocal();
+    renderDlList();
+    let msg = `${mc} 已清除 ${MB(r.bytes)}`;
+    if (r.removed && r.removed.length) msg += `，删了 ${r.removed.length} 个档案目录`;
+    if (r.kept && r.kept.length) msg += `，保留 ${r.kept.length} 个目录（${r.kept[0].why}）`;
+    toast(msg, 'ok');
+    closeDetail();
+  } catch (e) { err(e); }
 }
 
 /* ---------------- 检查更新 ---------------- */
@@ -1334,6 +1515,17 @@ async function renderSettings() {
     { label: 'CurseForge API Key', key: 'curseApiKey', value: s.curseApiKey || '', ph: '没有就只用 Modrinth', hint: '免费申请：https://console.curseforge.com/ → REGISTER AN APP', full: true },
     { label: '微软登录 Client ID', key: 'msClientId', value: s.msClientId || '', ph: 'Azure 应用注册页里的「应用程序(客户端) ID」', hint: '正版登录必需：https://portal.azure.com → App registrations', full: true },
     { label: 'RCL 更新源（返回 JSON 的地址）', key: 'updateFeed', value: s.updateFeed || '', ph: 'https://... /rcl-latest.json　形如 {"version":"1.0.3","url":"...","notes":"..."}', hint: '留空则「检查更新」只查 MC 内容，不查 RCL 自身', full: true },
+    {
+      label: '默认版本隔离', key: 'isolation', type: 'select', value: s.isolation || 'all', full: true,
+      options: [
+        ['off', '关闭 —— 所有档案共用一个目录，库也全部共享'],
+        ['all', '隔离所有版本 —— 每个版本独立目录和自己的库'],
+        ['modded', '隔离可安装 Mod 的版本 —— 带加载器的版本独立，纯原版共用'],
+        ['nonrelease', '隔离非正式版 —— 快照/Alpha/Beta 独立，正式版共用'],
+        ['modded-nonrelease', '隔离可安装 Mod 的版本与非正式版 —— 上面两条取并集'],
+      ],
+      hint: '只影响【之后新建】的档案与【之后下载】的库；已有档案的目录不会漂移，存档不会突然看不见。库切到隔离后，旧共享库仍作只读回退，不会让你重下',
+    },
     { label: '额外 JVM 参数（全局）', key: 'jvmArgs', value: s.jvmArgs, full: true },
     { label: '服务器存放目录', key: 'subRoot', value: s.subRoot || '', ph: S.info.serversRoot, row: `<button class="ghost" type="button" id="pick-root">浏览…</button>`, full: true, hint: '默认 ' + S.info.serversRoot },
   ]) + `<div class="form-actions"><button class="ghost" id="java-rescan">重新检测 Java</button><button class="cta" id="set-save">保存设置</button></div>
@@ -1485,6 +1677,8 @@ async function init() {
   $('#dl-type').onchange = () => renderDlList();
   $('#dl-refresh').onclick = async () => { S.versions = null; $('#dl-pick-hint').textContent = '刷新中…'; await renderDl(); };
   $('#mp-go').onclick = () => { MP.q = $('#mp-q').value.trim(); mpSearch(); };
+  $('#dd-back').onclick = closeDetail;
+  for (const b of $$('#dd-side button')) b.onclick = () => { DD.side = b.dataset.side; paintDetail(); };
   $('#mp-q').onkeydown = (e) => { if (e.key === 'Enter') { MP.q = $('#mp-q').value.trim(); mpSearch(); } };
   window.addEventListener('keydown', (e) => {
     if (e.altKey && VIEWS[Number(e.key) - 1]) switchView(VIEWS[Number(e.key) - 1]);

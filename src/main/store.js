@@ -25,6 +25,7 @@ const DEFAULT_SETTINGS = {
   curseApiKey: '',        // CurseForge 官方接口必须，留空则该源不可用
   msClientId: '',         // 微软正版登录用的 Azure 应用客户端 ID
   updateFeed: '',         // RCL 自身更新源：返回 {version,url,notes} 的 JSON 地址
+  isolation: 'all',       // 版本隔离策略：off | all | modded | modded-nonrelease（只影响新建档案）
   contentSource: 'modrinth',
 };
 
@@ -202,7 +203,13 @@ class Store {
     if (this.games.some((g) => sanitizeName(g.name) === name)) throw new Error('已有同名游戏档案，换一个名字');
     if (input.dir) {
       const d = path.resolve(input.dir);
-      if (!fs.existsSync(d) || !fs.statSync(d).isDirectory()) throw new Error(`目录不存在：${d}`);
+      const ours = path.resolve(path.dirname(d)) === path.resolve(this.dirs.games);
+      if (fs.existsSync(d)) {
+        if (!fs.statSync(d).isDirectory()) throw new Error(`那个位置是个文件不是目录：${d}`);
+      } else if (!ours) {
+        // 隔离策略的共享根允许还不存在（下面会建）；导入别人已有目录必须已经存在
+        throw new Error(`目录不存在：${d}`);
+      }
     }
     const g = { ...DEFAULT_GAME, id: crypto.randomUUID(), name };
     // 登录方式与账号必须一起落盘，否则建完档案永远是离线

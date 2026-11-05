@@ -32,7 +32,8 @@ let raw = '';
   store.patchSettings({ autoEula: true, memoryMB: 2048, mirror: process.env.MIRROR || 'official', jvmPreset: 'aikar' });
   store.settings.appVersion = '1.0.1';
   const catalog = new Catalog(store.dirs);
-  const remote = new Remote({ store, dirs: store.dirs });
+  catalog.isolationMode = () => store.settings.isolation;
+  const remote = new Remote({ store, dirs: store.dirs, catalog });
   const auth = new Auth({ dirs: store.dirs });
   const client = new ClientStore({ store, catalog, remote, auth });
   const installer = new Installer({ store, catalog, remote });
@@ -101,6 +102,16 @@ let raw = '';
       const r = await installer.installForge(store.get(id), fv);
       say('Forge:', r.note);
       store.patch(id, { core: 'forge', coreVersion: fv, installed: true });
+    }
+    if (core === 'neoforge') {
+      const list = await installer.listNeoForge(mc);
+      const nv = list.recommended;
+      if (!nv) throw new Error(`${mc} 没有 NeoForge 版本${list.error ? '（' + list.error + '）' : ''}`);
+      say(`NeoForge 候选 ${list.total || 0} 个，确认对得上的 ${list.versions.length} 个，取 ${nv}`);
+      installer.pickJava = pickJava;
+      const r = await installer.installNeoForge(store.get(id), nv);
+      say('NeoForge:', r.note);
+      store.patch(id, { core: 'neoforge', coreVersion: nv, installed: true });
     }
   }
 

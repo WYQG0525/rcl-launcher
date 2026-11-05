@@ -293,3 +293,22 @@ body[data-theme="light"] {
   #pill-dl.ok { animation: rclBreathe 2.2s ease-in-out infinite; }
   @keyframes rclBreathe { 50% { opacity: .62; } }
 }
+
+/* ---------- 版本详情页 ---------- */
+.vn.link { cursor: pointer; }
+.vn.link:hover { color: var(--acc); text-decoration: underline; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; margin-left: 8px; }
+.seg button { border: 0; background: transparent; color: var(--fg3); padding: 4px 12px; font-size: 12px; cursor: pointer; }
+.seg button.on { background: color-mix(in srgb, var(--acc) 22%, transparent); color: var(--fg); }
+.dd-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; border: 1px solid var(--line); border-radius: 11px; padding: 9px 11px; margin-bottom: 7px; background: var(--card); }
+.dd-row.dim { opacity: .52; }
+.dd-row:hover { border-color: color-mix(in srgb, var(--acc) 40%, var(--line)); }
+.dd-name b { font-size: 13px; }
+.dd-name em { font-style: normal; display: block; font-size: 11px; color: var(--fg3); margin-top: 2px; }
+.dd-act { display: flex; gap: 7px; align-items: center; flex: 0 0 auto; }
+.dd-st { font-size: 11.5px; color: var(--fg3); }
+.dd-st.warn { color: var(--warn); }
+.dd-foot { display: flex; gap: 8px; align-items: center; margin-top: 4px; }
+.dd-saves ul { margin: 4px 0 0; padding-left: 18px; }
+.dd-saves li { font-size: 12px; margin: 2px 0; }
+.dd-saves em { font-style: normal; color: var(--fg3); font-size: 11px; }

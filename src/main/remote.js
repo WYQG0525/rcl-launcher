@@ -27,9 +27,15 @@ function readJsonSafe(p, fb) { try { return JSON.parse(fs.readFileSync(p, 'utf8'
 const MB = (n) => (n / 1048576).toFixed(1);
 
 class Remote {
-  constructor({ store, dirs }) {
+  constructor({ store, dirs, catalog }) {
     this.store = store;
     this.dirs = dirs;
+    // 没接 Catalog 时退化成"全共享"，脚本里单独用 Remote 也不会炸
+    this.catalog = catalog || {
+      isolatedFor: () => false,
+      versionLibDir: () => dirs.libraries,
+      findLib: (rel) => { const p = path.join(dirs.libraries, rel); return fs.existsSync(p) ? p : null; },
+    };
     this.root = dirs.root;
     this.metaDir = ensureDir(path.join(dirs.root, 'store', 'meta'));
     this.jreRoot = ensureDir(path.join(dirs.root, 'runtime'));
@@ -146,18 +152,19 @@ class Remote {
   async _downloadLibraries(mc, { client = true } = {}) {
     const j = await this.versionJson(mc);
     const prof = resolveProfile(j, { server: !client });
+    const root = this.libRoot(mc);
     const tasks = [];
     for (const l of prof.libraries) {
-      if (this.findLib(l.path)) continue;
-      tasks.push({ name: path.basename(l.path), target: path.join(this.dirs.libraries, l.path), url: l.urls ? l.urls[0] : l.url, candidates: (l.urls || [l.url]).flatMap((u) => mirrorUrls(u, this.settings.mirror)), sha1: l.sha1, size: l.size || 0 });
+      if (this.catalog.findLib(l.path, [root]) || this.findLib(l.path)) continue;
+      tasks.push({ name: path.basename(l.path), target: path.join(root, l.path), url: l.urls ? l.urls[0] : l.url, candidates: (l.urls || [l.url]).flatMap((u) => mirrorUrls(u, this.settings.mirror)), sha1: l.sha1, size: l.size || 0 });
     }
     if (client) {
       for (const l of j.libraries || []) {
         const want = l.natives && (l.natives.windows || l.natives['windows-x86_64']);
         if (!want || !l.downloads || !l.downloads.classifiers) continue;
         for (const [k, a] of Object.entries(l.downloads.classifiers)) {
-          if (!/natives-windows/.test(k) || this.findLib(a.path)) continue;
-          tasks.push({ name: path.basename(a.path), target: path.join(this.dirs.libraries, a.path), url: a.url, candidates: mirrorUrls(a.url, this.settings.mirror), sha1: a.sha1, size: a.size });
+          if (!/natives-windows/.test(k) || this.catalog.findLib(a.path, [root]) || this.findLib(a.path)) continue;
+          tasks.push({ name: path.basename(a.path), target: path.join(root, a.path), url: a.url, candidates: mirrorUrls(a.url, this.settings.mirror), sha1: a.sha1, size: a.size });
         }
       }
     }
@@ -173,14 +180,21 @@ class Remote {
     return fs.existsSync(p) ? p : null;
   }
 
-  // 加载器 profile 自带的库（Fabric loader 那几个），一律落到共享库目录
-  async downloadProfileLibraries(libs, label) {
+  // 隔离策略决定库落在哪：隔离时进版本目录（删版本就能彻底回收），否则进共享池
+  libRoot(mc, { loader = false } = {}) {
+    if (this.catalog && mc && this.catalog.isolatedFor(mc, { loader })) return this.catalog.versionLibDir(mc);
+    return this.dirs.libraries;
+  }
+
+  // 加载器 profile 自带的库（Fabric loader 那几个），一律落到该版本该去的地方
+  async downloadProfileLibraries(libs, label, mc = '') {
+    const root = this.libRoot(mc, { loader: true });
     const tasks = [];
     for (const l of libs) {
-      if (!l.path || this.findLib(l.path)) continue;
+      if (!l.path || this.catalog.findLib(l.path, [root]) || this.findLib(l.path)) continue;
       const urls = l.urls && l.urls.length ? l.urls : [l.url];
       tasks.push({
-        name: path.basename(l.path), target: path.join(this.dirs.libraries, l.path),
+        name: path.basename(l.path), target: path.join(root, l.path),
         url: urls[0], candidates: urls.filter(Boolean).flatMap((u) => mirrorUrls(u, this.settings.mirror)),
         sha1: l.sha1 || null, size: l.size || 0,
       });
@@ -204,7 +218,7 @@ class Remote {
       fs.writeFileSync(file, JSON.stringify(j, null, 2));
     }
     const libs = resolveProfile(j, { server: false }).libraries;
-    const dl = await this.downloadProfileLibraries(libs, `下载 Fabric ${mc} 库`);
+    const dl = await this.downloadProfileLibraries(libs, `下载 Fabric ${mc} 库`, mc);
     const ver = (String(j.id || '').split('-')[2]) || '';
     return { json: file, version: ver, libs: libs.length, bytes: dl.bytes, note: `Fabric ${ver} 客户端 profile（${libs.length} 个库，${dl.note}）` };
   }

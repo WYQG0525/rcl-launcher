@@ -31,6 +31,7 @@ function ensureDirs(root) {
     paper: path.join(root, 'store', 'paper'),
     fabric: path.join(root, 'store', 'fabric'),
     forge: path.join(root, 'store', 'forge'),
+    neoforge: path.join(root, 'store', 'neoforge'),
     natives: path.join(root, 'store', 'natives'),
     meta: path.join(root, 'store', 'meta'),
     logs: path.join(root, 'logs'),
@@ -38,7 +39,7 @@ function ensureDirs(root) {
     instances: path.join(root, 'instances.json'),
     gamesIndex: path.join(root, 'games.json'),
   };
-  for (const k of ['root', 'servers', 'games', 'runtime', 'store', 'versions', 'libraries', 'assets', 'paper', 'fabric', 'natives', 'meta', 'logs']) {
+  for (const k of ['root', 'servers', 'games', 'runtime', 'store', 'versions', 'libraries', 'assets', 'paper', 'fabric', 'forge', 'neoforge', 'natives', 'meta', 'logs']) {
     try { fs.mkdirSync(dirs[k], { recursive: true }); } catch { /* 只读盘时留给上层报错 */ }
   }
   return dirs;

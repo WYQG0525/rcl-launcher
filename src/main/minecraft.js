@@ -34,6 +34,8 @@ const MIRRORS = {
       ['https://resources.download.minecraft.net', 'https://bmclapi2.bangbang93.com/objects'],
       ['https://libraries.minecraft.net', 'https://bmclapi2.bangbang93.com/maven2'],
       ['https://maven.minecraftforge.net', 'https://bmclapi2.bangbang93.com/maven'],
+      // NeoForge 官方站在国内直连经常超时（实测 117 次下载只成 21 次），BMCLAPI 整套镜像了
+      ['https://maven.neoforged.net/releases', 'https://bmclapi2.bangbang93.com/maven'],
       ['https://meta.fabricmc.net', 'https://bmclapi2.bangbang93.com/fabric-meta'],
       ['https://fill.papermc.io', 'https://bmclapi2.bangbang93.com/paper'],
     ],
@@ -176,6 +178,10 @@ const unescapeArg = (a) => a.replace(/^"|"$/g, '').replace('""', '"');
 const PAPER_API = 'https://fill.papermc.io/v3';
 const FABRIC_API = 'https://meta.fabricmc.net/v2';
 const FORGE_MAVEN = 'https://maven.minecraftforge.net';
+// NeoForge 的仓库是 Reposilite，没有 promotions 接口（api.neoforged.com 已经 301 到官网）
+// 注意两个 base 不一样：构件在 /releases/... 下，版本 API 在 /api/maven/... 下
+const NEOFORGE_MAVEN = 'https://maven.neoforged.net/releases';
+const NEOFORGE_API = 'https://maven.neoforged.net/api';
 const ADOPTIUM_API = 'https://api.adoptium.net/v3';
 
 function paperVersionUrl(mc) { return `${PAPER_API}/projects/paper/versions/${encodeURIComponent(mc)}`; }
@@ -195,10 +201,38 @@ function jreAssetsUrl(major) {
   return `${ADOPTIUM_API}/assets/latest/${major}/hotspot?architecture=x64&image_type=jre&os=windows&vendor=eclipse`;
 }
 
+function neoforgeVersionsUrl() { return `${NEOFORGE_API}/maven/versions/releases/net/neoforged/neoforge`; }
+// 版本清单优先用 maven-metadata.xml：它在 BMCLAPI 上有镜像，而 /api/maven 没有
+function neoforgeMetadataUrl() { return `${NEOFORGE_MAVEN}/net/neoforged/neoforge/maven-metadata.xml`; }
+function neoforgeFileUrl(neoVersion, classifier) {
+  const file = classifier ? `neoforge-${neoVersion}-${classifier}.jar` : `neoforge-${neoVersion}.jar`;
+  return `${NEOFORGE_MAVEN}/net/neoforged/neoforge/${neoVersion}/${file}`;
+}
+// MC 版本只能从 Gradle 元数据里的 neoform 依赖读出来（16-21KB，比下载 7MB 安装器便宜得多）
+function neoforgeModuleUrl(neoVersion) { return `${NEOFORGE_MAVEN}/net/neoforged/neoforge/${neoVersion}/neoforge-${neoVersion}.module`; }
+function neoforgeMcFromModule(j) {
+  const deps = ((j || {}).variants || []).flatMap((v) => v.dependencies || []);
+  const hit = deps.find((d) => d.group === 'net.neoforged' && d.module === 'neoform');
+  const req = hit && hit.version && (hit.version.requires || hit.version.preferred);
+  return req ? String(req).split('-')[0] : null;
+}
+
+// NeoForge 版本号是按 MC 派生的：MC 1.21.1 → 21.1.*，MC 26.1.2 → 26.1.2.*
+// 只是粗筛用的前缀，最终仍以 .module 里的 neoform 依赖为准
+function neoforgePrefix(mc) {
+  const old = /^1\.(\d+)\.(\d+)/.exec(String(mc || ''));
+  if (old) return `${old[1]}.${old[2]}.`;
+  const three = /^(\d+)\.(\d+)\.(\d+)/.exec(String(mc || ''));
+  if (three) return `${three[1]}.${three[2]}.${three[3]}.`;
+  const two = /^(\d+)\.(\d+)$/.exec(String(mc || ''));
+  return two ? `${two[1]}.${two[2]}.` : null;
+}
+
 module.exports = {
   VERSIONS, RUNTIME_MAJOR, MIRRORS,
   mirrorUrls, mavenPath, allowRules, resolveProfile,
   paperVersionUrl, paperBuildUrl,
   fabricLoadersUrl, fabricInstallersUrl, fabricProfileUrl, repoBases,
   forgeMetadataUrl, forgeFileUrl, jreAssetsUrl,
+  neoforgeVersionsUrl, neoforgeMetadataUrl, neoforgeFileUrl, neoforgeModuleUrl, neoforgeMcFromModule, neoforgePrefix,
 };

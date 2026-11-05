@@ -60,6 +60,11 @@ const api = {
   dlListFabric: call('dl:listFabric'),
   dlListForge: call('dl:listForge'),
   dlInstallForge: call('dl:installForge'),
+  dlListNeoForge: call('dl:listNeoForge'),
+  dlInstallNeoForge: call('dl:installNeoForge'),
+  dlInstallLoaderClient: call('dl:installLoaderClient'),
+  dlDeletePreview: call('dl:deletePreview'),
+  dlPurgeVersion: call('dl:purgeVersion'),
   dlUninstall: call('dl:uninstall'),
   dlLocal: call('dl:local'),
 
